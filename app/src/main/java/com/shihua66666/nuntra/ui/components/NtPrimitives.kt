@@ -1,9 +1,7 @@
 package com.shihua66666.nuntra.ui.components
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -15,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -42,7 +39,10 @@ fun NtPanel(
     modifier: Modifier = Modifier,
     elevated: Boolean = false,
     contentPadding: PaddingValues = PaddingValues(14.dp),
-    content: @Composable () -> Unit,
+    // 必须是 ColumnScope 接收者：调用方会在面板里用 Spacer(Modifier.weight(1f)) 做右对齐，
+    // weight 只有 ColumnScope 才有。写成普通 () -> Unit 会得到
+    // 「ComposableFunction0<Unit> 与 ComposableFunction1<ColumnScope, Unit> 不匹配」。
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
     val colors = LocalAppColors.current
     Column(

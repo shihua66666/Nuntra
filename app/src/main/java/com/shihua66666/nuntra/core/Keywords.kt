@@ -14,14 +14,26 @@ package com.shihua66666.nuntra.core
  */
 object Keywords {
 
-    /** 转义正则元字符，允许用户输入 ( ) [ ] . * + ? 等字符而不会崩。 */
+    /**
+     * 正则元字符集合。
+     *
+     * 用 String 而不是 Char 集合：escape() 里要按字符逐个判断，
+     * 用 "字符是否包含于这个字符串" 判断即可，避免维护一个 Char 数组。
+     */
+    private const val REGEX_META = "\\.[]{}()*+?^$|-"
+
+    /**
+     * 转义正则元字符，允许用户输入 ( ) [ ] . * + ? 等字符而不会崩。
+     *
+     * 注意：这里的判断走 `REGEX_META.contains(c)`，c 是 Char、REGEX_META 是 String，
+     * 两者类型不同但 contains(Char) 是合法重载；早期写成 when(c) { "..." -> } 会得到
+     * 「Incompatible types Char and String」，这也是 CI 上报过的错误。
+     */
     fun escape(raw: String): String {
         val sb = StringBuilder(raw.length * 2)
         for (c in raw) {
-            when (c) {
-                "\\", ".", "(", ")", "[", "]", "{", "}", "*", "+", "?", "^", "$", "|", "-" -> sb.append("\\").append(c)
-                else -> sb.append(c)
-            }
+            if (REGEX_META.contains(c)) sb.append('\\')
+            sb.append(c)
         }
         return sb.toString()
     }

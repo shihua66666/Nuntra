@@ -12,11 +12,8 @@ import android.content.res.Configuration
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
-import android.view.View
 import android.view.WindowManager
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.shihua66666.nuntra.MainActivity
@@ -25,7 +22,6 @@ import com.shihua66666.nuntra.core.Logx
 import com.shihua66666.nuntra.core.ServiceLocator
 import com.shihua66666.nuntra.ui.overlay.OverlayPlaceholder
 import com.shihua66666.nuntra.ui.overlay.OverlayRoot
-import com.shihua66666.nuntra.ui.theme.AppColors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -33,7 +29,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * 悬浮窗前台服务。

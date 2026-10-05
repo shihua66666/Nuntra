@@ -1,6 +1,7 @@
 package com.shihua66666.nuntra.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.shihua66666.nuntra.core.Logx
@@ -68,7 +69,7 @@ class TagRepository(private val context: Context) {
     suspend fun ensureInitialized() = withContext(Dispatchers.IO) {
         runCatching {
             val prefs = store.data.first()
-            val migrated = prefs[KEY_TAGS_INITIALIZED] ?: false
+            val migrated: Boolean = prefs[KEY_TAGS_INITIALIZED] ?: false
             val rawTags = prefs[KEY_TAGS].orEmpty()
             val rawContacts = prefs[KEY_WATCHED].orEmpty()
 
@@ -312,7 +313,10 @@ class TagRepository(private val context: Context) {
 
         private val KEY_TAGS = stringPreferencesKey("tags_json")
         private val KEY_WATCHED = stringPreferencesKey("watched_contacts_json")
-        private val KEY_TAGS_INITIALIZED = stringPreferencesKey("tags_initialized")
+        // 必须与写入值的类型一致：写的是 Boolean（prefs[KEY] = true），
+        // 因此这里是 booleanPreferencesKey。用成 stringPreferencesKey 会得到
+        // 「Argument type mismatch: actual type is Boolean, but String was expected」。
+        private val KEY_TAGS_INITIALIZED = booleanPreferencesKey("tags_initialized")
 
         /**
          * 标签色板。唯一来源是 ui/theme/TagPalette.kt，这里直接复用。

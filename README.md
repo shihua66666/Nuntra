@@ -203,6 +203,44 @@ app/src/main/java/com/shihua66666/nuntra/
 
 ---
 
+## 7.5 res 目录硬性约束（踩过的坑，务必遵守）
+
+**Android 资源文件名只允许小写字母、数字、下划线**（`[a-z0-9_]`），且各目录有扩展名白名单。
+本项目曾因在 `res/raw/` 与 `res/font/` 放 `README.txt` 而导致构建失败：
+
+```text
+error: 'README.txt' is not a valid file-based resource name character: File-based resource
+names must contain only lowercase a-z, 0-9, or underscore
+```
+
+### 规则
+
+| 目录 | 允许的扩展名 | 备注 |
+|---|---|---|
+| `res/font/` | `.ttf` `.otf` `.ttc` `.xml` | **只放字体**，不要放说明文件 |
+| `res/raw/` | `.mp3` `.ogg` `.wav` 等媒体与 `.txt` `.json` | 文件名必须全小写；`README.txt` 这类大写名非法 |
+| `res/values/` | `.xml` | 颜色、字符串、主题 |
+| `res/drawable/` | `.xml` `.png` `.webp` | 矢量图用 `.xml` |
+| `res/mipmap-anydpi-v26/` | `.xml` | 自适应图标 |
+
+> 注意：**限定符目录**（`-anydpi`、`-v26`、`-zh`、`-xhdpi` 等）可以包含连字符与大写字母，
+> 例如 `mipmap-anydpi-v26` 是合法的。限制针对的是**资源名本体**。
+
+### 说明文字该放哪
+
+- 工程级说明 → 根目录 `README.md` 或 `docs/`
+- 随 APK 分发的只读文本 → `assets/`（不受资源命名限制，但注意：本项目为纯离线应用，不引入无关资源）
+- **绝不要**为了写注释而在 `res/` 下新增占位文件
+
+### 约定文件名（代码按名字引用，改名需同步改代码）
+
+| 资源 | 约定路径 | 缺失时行为 |
+|---|---|---|
+| IBM Plex Mono | `res/font/ibm_plex_mono_regular.ttf` | 回退系统等宽字体（`MonoFont.load` 用资源名探测，不阻塞构建） |
+| 特殊关注提醒音 | `res/raw/alert_priority.mp3` | 回退系统通知音 |
+
+---
+
 ## 8. 已知未验证项（诚实标注）
 
 本工程在**没有 Android 工具链的机器**上编写，因此以下内容尚未经过编译或真机验证：

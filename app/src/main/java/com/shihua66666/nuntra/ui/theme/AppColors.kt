@@ -29,6 +29,8 @@ data class AppColors(
     val sourceWeChat: Color,
     val sourceQq: Color,
     val sourceSms: Color,
+    /** 企业微信 / TIM 共用（腾讯系办公）。 */
+    val sourceOffice: Color,
     val sourceUnknown: Color,
     /** 来自扩展需求（提醒音/重复提醒）的语义色，便于卡片上表达警示。 */
     val alertHighlight: Color,
@@ -134,6 +136,8 @@ data class AppColors(
                 sourceWeChat = Color(0xFF5E8C6A),
                 sourceQq = Color(0xFF5E7FA3),
                 sourceSms = parse(sourceSmsHex),
+                // 办公系来源色固定，不随主题的短信色变化：它要一眼与个人短信区分开
+                sourceOffice = Color(0xFF5E7FA3),
                 sourceUnknown = Color(0xFF6E7A85),
                 alertHighlight = lerp(Color(0xFFC96B6B), Color.White, 0.12f),
                 muted = lerp(textSecondary, background, 0.25f),

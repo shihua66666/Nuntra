@@ -5,7 +5,6 @@ import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationManagerCompat
 import com.shihua66666.nuntra.core.Logx
 import com.shihua66666.nuntra.core.ServiceLocator
-import com.shihua66666.nuntra.data.MessageStore
 import com.shihua66666.nuntra.monitor.ExtractedNotification
 import com.shihua66666.nuntra.monitor.FilterContext
 import com.shihua66666.nuntra.monitor.FilterDecision
@@ -308,14 +307,10 @@ class NuntraNotificationListener : NotificationListenerService() {
         }.getOrDefault(false)
 
         /** 请求系统重新绑定监听服务（权限被临时回收后使用）。 */
-        fun requestRebind(service: NotificationListenerService) {
-            // 用 (ComponentName) 重载：它在 API 24 就已存在，无需 @RequiresApi；
-            // 无参重载是 API 26 才加入的，用它会引入不必要的最低版本约束。
-            runCatching {
-                service.requestRebind(
-                    android.content.ComponentName(service, NuntraNotificationListener::class.java),
-                )
-            }.onFailure { Logx.swallow(TAG, "requestRebind", it) }
-        }
+        // 注意：这里刻意**不**封装 NotificationListenerService.requestRebind(...)。
+        // 该 API 在不同版本上的可用重载不一致（CI 上直接报 Unresolved reference），
+        // 而它对本项目并非必需：权限被回收后，正确做法是让用户回设置页重新授权，
+        // 由系统自行重绑。少一个 API 依赖，就少一处版本风险。
+
     }
 }

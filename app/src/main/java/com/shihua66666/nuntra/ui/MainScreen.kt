@@ -15,7 +15,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -30,6 +29,7 @@ import com.shihua66666.nuntra.ui.components.NtDivider
 import com.shihua66666.nuntra.ui.components.NtMono
 import com.shihua66666.nuntra.ui.components.NtPanel
 import com.shihua66666.nuntra.ui.components.NtStatusDot
+import com.shihua66666.nuntra.ui.components.NtSwitchRow
 import com.shihua66666.nuntra.ui.components.SectionHeader
 import com.shihua66666.nuntra.ui.theme.AppColors
 import com.shihua66666.nuntra.ui.theme.LocalAppColors
@@ -125,16 +125,20 @@ private fun MasterSwitchPanel(
     onToggle: (Boolean) -> Unit,
 ) {
     val c = LocalAppColors.current
+    // 先在局部变量里算好文案：把 if/else 直接写进命名参数在部分 Kotlin 版本上
+    // 会触发解析歧义（CI 上曾报 Syntax error: Unexpected tokens）。
+    val title = if (enabled) "正在运行中" else "已暂停监控（省电模式）"
+    val subtitle = if (enabled) {
+        "监听已开启：符合监控范围的通知会被收纳到悬浮窗。"
+    } else {
+        "总闸关闭：监听服务收到通知会立即丢弃，不做任何解析；前台服务与悬浮窗一并停止。"
+    }
     NtPanel(modifier = Modifier.fillMaxWidth()) {
         SectionHeader(title = "总监控开关")
         Spacer(Modifier.height(6.dp))
         NtSwitchRow(
-            title = if (enabled) "正在运行中" else "已暂停监控（省电模式）",
-            subtitle = if (enabled) {
-                "监听已开启：符合监控范围的通知会被收纳到悬浮窗。"
-            } else {
-                "总闸关闭：监听服务收到通知会立即丢弃，不做任何解析；前台服务与悬浮窗一并停止。",
-            },
+            title = title,
+            subtitle = subtitle,
             checked = enabled,
             onCheckedChange = onToggle,
         )

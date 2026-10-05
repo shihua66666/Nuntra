@@ -1,13 +1,11 @@
 package com.shihua66666.nuntra.overlay
 
 import android.content.Context
-import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import com.shihua66666.nuntra.core.Logx
-import com.shihua66666.nuntra.ui.theme.AppColors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -123,7 +121,9 @@ class OverlayWindowController(
     fun detach() {
         val view = hostView ?: return
         runCatching {
-            persistNow()
+            // persistNow() 是挂起函数（要写 DataStore），detach() 不是 coroutine，
+            // 因此放到 serviceScope 里异步执行；窗口移除本身是同步的，不受影响。
+            serviceScope.launch { persistNow() }
             windowManager.removeView(view)
         }.onFailure { Logx.swallow(TAG, "removeView", it) }
 

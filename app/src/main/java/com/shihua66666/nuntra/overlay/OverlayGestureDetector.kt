@@ -3,7 +3,6 @@ package com.shihua66666.nuntra.overlay
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View

@@ -14,6 +14,8 @@ object SourceColors {
     fun of(colors: AppColors, source: SourceApp): Color = when (source) {
         SourceApp.WECHAT -> colors.sourceWeChat
         SourceApp.QQ -> colors.sourceQq
+        // 企业微信与 TIM 同属腾讯系办公，共用一个来源色（settings 里那张提示卡也这么表述）
+        SourceApp.WECOM, SourceApp.TIM -> colors.sourceOffice
         SourceApp.SMS -> colors.sourceSms
         SourceApp.UNKNOWN -> colors.sourceUnknown
     }

@@ -6,10 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Box
@@ -18,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -31,9 +28,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Scaffold
-import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import com.shihua66666.nuntra.model.ReadinessSnapshot
 import com.shihua66666.nuntra.ui.components.NtButton
 import com.shihua66666.nuntra.ui.components.NtCaption
@@ -156,6 +151,20 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+/**
+ * 尚未实现的区块占位（第 6 步起逐个替换为真实内容）。
+ *
+ * 用统一组件而不是各写一段文案：避免「有的区块有说明、有的没有」的不一致。
+ */
+@Composable
+private fun PlaceholderSection(title: String, note: String) {
+    NtPanel(modifier = Modifier.fillMaxWidth()) {
+        SectionHeader(title = title)
+        Spacer(Modifier.height(6.dp))
+        NtCaption(text = note)
     }
 }
 

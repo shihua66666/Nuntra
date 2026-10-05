@@ -1,9 +1,9 @@
 package com.shihua66666.nuntra.overlay
 
-import android.content.Context
 import com.shihua66666.nuntra.core.Logx
 import com.shihua66666.nuntra.data.AppPreferences
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withContext
 
 /**
@@ -35,7 +35,9 @@ class OverlayPositionStore(private val preferences: AppPreferences) {
         val defaultX = (screenW - windowWidth - MARGIN_PX).coerceAtLeast(MARGIN_PX)
         val defaultY = ((screenH - windowHeight) / 2).coerceAtLeast(MARGIN_PX)
         runCatching {
-            val saved = kotlinx.coroutines.flow.firstOrNull(preferences.overlayPosition)
+            // firstOrNull 是 Flow 的扩展函数，必须写成 a.firstOrNull()，
+            // 写成 firstOrNull(flow) 会得到 Unresolved reference。
+            val saved = preferences.overlayPosition.firstOrNull()
             if (saved == null) {
                 Logx.i(TAG, "无历史位置，使用默认位置：右中")
                 defaultX to defaultY
@@ -44,6 +46,7 @@ class OverlayPositionStore(private val preferences: AppPreferences) {
             }
         }.getOrElse { tr ->
             Logx.swallow(TAG, "loadOrDefault", tr)
+            // 显式给出 Pair<Int, Int>，否则两个分支的类型会被推成 Any 导致 clamp 参数报错
             defaultX to defaultY
         }
     }
@@ -57,8 +60,11 @@ class OverlayPositionStore(private val preferences: AppPreferences) {
 
     suspend fun loadMiniSize(): OverlaySizePx? = withContext(Dispatchers.IO) {
         runCatching {
-            kotlinx.coroutines.flow.firstOrNull(preferences.overlaySize)?.let {
-                if (it.width > 0 && it.height > 0) OverlaySizePx(it.width, it.height) else null
+            val saved: com.shihua66666.nuntra.data.OverlaySize? = preferences.overlaySize.firstOrNull()
+            if (saved == null || saved.width <= 0 || saved.height <= 0) {
+                null
+            } else {
+                OverlaySizePx(saved.width, saved.height)
             }
         }.getOrElse { null }
     }

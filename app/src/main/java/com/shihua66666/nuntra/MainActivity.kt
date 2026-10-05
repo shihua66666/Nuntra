@@ -8,8 +8,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+// ★ 属性委托 by 必需：by 会被编译成 getValue/setValue 调用，
+//   这两个名字在源码里不出现，因此「未使用 import 清理」极易把它们误删
+//   （CI 上正是因此报 Unresolved reference 'it' 与一堆下游错误）。
+//   凡是用 val x by ... / var x by ... 的文件都必须保留这两个 import。
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.shihua66666.nuntra.core.Logx
 import com.shihua66666.nuntra.core.ServiceLocator

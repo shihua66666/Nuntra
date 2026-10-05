@@ -241,6 +241,28 @@ names must contain only lowercase a-z, 0-9, or underscore
 
 ---
 
+## 7.6 不要「清理」getValue / setValue（踩过的坑）
+
+属性委托 `by` 在语法上要求作用域内有 `getValue` / `setValue` 两个 operator：
+
+```kotlin
+var draft by remember { mutableStateOf("") }   // 需要 getValue + setValue
+val colors by flow.collectAsState()            // 需要 getValue
+```
+
+但这两个名字**在源码文本里从不出现**，因此任何「找出未使用 import 并删除」的工具
+都会把它们误判为无用并删掉，随后报出一堆难以定位的下游错误：
+
+```text
+e: SettingsScreen.kt:305 Unresolved reference 'it'
+e: SettingsScreen.kt:308 @Composable invocations can only happen from the context of a @Composable function
+```
+
+**结论：删除 import 前必须排除 operator 函数**（`getValue`、`setValue`、`provideDelegate`、
+`component1..component5`），它们可能被语言机制隐式调用。本仓库曾因此删错 3 个文件。
+
+---
+
 ## 8. 已知未验证项（诚实标注）
 
 本工程在**没有 Android 工具链的机器**上编写，因此以下内容尚未经过编译或真机验证：

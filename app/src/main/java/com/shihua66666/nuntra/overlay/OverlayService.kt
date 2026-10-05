@@ -13,7 +13,12 @@ import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import android.view.WindowManager
+// ★ 属性委托必需（uiState 用了 var uiState by mutableStateOf(...)）。
+//   by 编译成 getValue/setValue 调用，这两个名字在源码里不出现，
+//   因此不能被「未使用 import」清理误删 —— CI 上正是如此报错。
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.shihua66666.nuntra.MainActivity

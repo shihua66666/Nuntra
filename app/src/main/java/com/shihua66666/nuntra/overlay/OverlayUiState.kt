@@ -14,6 +14,10 @@ data class OverlayUiState(
     val selectedTagIds: Set<String> = emptySet(),
     /** 关键词筛选（悬浮窗内的即时过滤，与设置页的关注人关键词不是一回事）。 */
     val query: String = "",
+    /** 顶部标签筛选栏是否可见（底栏「筛选」按钮控制）。 */
+    val filterVisible: Boolean = true,
+    /** 状态灯是否呼吸（设置里可关；关闭时静态显示，避免夜间干扰）。 */
+    val animateLamp: Boolean = true,
     /** 是否正在拖动：用于降低透明度作为反馈。 */
     val dragging: Boolean = false,
     /** 长按快捷菜单是否展开。 */
@@ -24,6 +28,8 @@ data class OverlayUiState(
     /** 长按菜单只在非拖动时弹出。 */
     fun withQuickMenu(visible: Boolean): OverlayUiState =
         copy(quickMenuVisible = visible, dragging = false)
+
+    fun withFilterVisible(visible: Boolean): OverlayUiState = copy(filterVisible = visible)
 
     fun withState(next: OverlayWindowState): OverlayUiState =
         copy(windowState = next, quickMenuVisible = false)

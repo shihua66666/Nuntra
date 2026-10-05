@@ -2,42 +2,35 @@ package com.shihua66666.nuntra.ui.overlay
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.shihua66666.nuntra.model.TagView
 import com.shihua66666.nuntra.overlay.OverlayWindowState
+import com.shihua66666.nuntra.ui.theme.AppColors
 import com.shihua66666.nuntra.ui.theme.LocalAppColors
-import com.shihua66666.nuntra.ui.theme.LocalMonoFamily
 import com.shihua66666.nuntra.ui.theme.OverlayDimens
 
 /**
- * 悬浮窗内容容器。
+ * 悬浮窗内容根容器：负责「外壳」与三态分发。
  *
- * 第 2 步只提供「正确的容器 + 三态骨架」：
- *  · 容器的圆角、底色、边框在这里统一处理，三种形态共用；
- *  · 具体内容（折叠胶囊 / 终端面板 / 小窗）在第 3、4 步填充。
+ * 外壳统一处理三种形态共用的视觉：圆角、半透明面板底、1dp 细边框。
+ * 之所以用半透明纯色而不是真实毛玻璃：窗口级模糊需要 API 31+ 的 RenderEffect，
+ * 在 minSdk 29 的设备上不可用；用半透明底色能拿到接近的柔和观感，且全版本一致。
  *
- * 容器本身的约束（来自需求）：低对比、柔和、不刺眼、不纯黑、无闪烁、圆角 6–8dp。
- * API 31+ 才可能有真实背景模糊，因此这里用半透明纯色 + 1dp 细边框打底，
- * 不做「看起来像毛玻璃其实是假渐变」的伪效果。
+ * 三态内容：
+ *   CAPSULE → [CollapsedCapsule]（状态灯 + 未读数）
+ *   PANEL / MINI → [ExpandedPanel]（标题栏 + 筛选栏 + 内容 + 底栏），两者共用组件，仅尺寸不同
  */
 @Composable
 fun OverlayRoot(
+    colors: AppColors,
     windowState: OverlayWindowState,
     unreadCount: Int,
     dragging: Boolean,
@@ -54,8 +47,7 @@ fun OverlayRoot(
         modifier = modifier
             .fillMaxSize()
             .clip(shape)
-            // 半透明面板底：让底层内容隐约可见，形成「轻毛玻璃」的观感
-            .background(c.panel.copy(alpha = 0.96f))
+            .background(c.panel.copy(alpha = PANEL_ALPHA))
             .border(1.dp, c.border, shape),
         contentAlignment = Alignment.Center,
     ) {
@@ -64,121 +56,67 @@ fun OverlayRoot(
 }
 
 /**
- * 第 2 步的占位内容。
+ * 三态分发器。
  *
- * 存在的意义是把「窗口能不能正常显示、拖动、切换形态、旋转后是否还在屏幕内」
- * 这批结构性问题先验证掉；内容做完后这个 Composable 会被删掉。
+ * 把「选哪个形态」集中在一处，OverlayService 只负责提供数据与回调。
+ * 这样第 4 步接入真实消息列表时，只需要替换 [messageList] 这一个插槽。
  */
 @Composable
-fun OverlayPlaceholder(
+fun OverlayContent(
+    colors: AppColors,
     windowState: OverlayWindowState,
     unreadCount: Int,
-    windowWidthPx: Int,
-    windowHeightPx: Int,
-    onPlaceholderTap: () -> Unit,
+    unreadTagColor: Color?,
+    dragging: Boolean,
+    tags: List<TagView>,
+    selectedTagIds: Set<String>,
+    messageCount: Int,
+    filterVisible: Boolean,
+    animateLamp: Boolean,
+    onToggleTag: (String) -> Unit,
+    onSelectAll: () -> Unit,
+    onToggleFilter: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onClearMessages: () -> Unit,
+    onCollapse: () -> Unit,
+    messageList: @Composable () -> Unit,
 ) {
-    val c = LocalAppColors.current
-    when (windowState) {
-        OverlayWindowState.CAPSULE -> CapsulePlaceholder(unreadCount, c.accent)
-        OverlayWindowState.PANEL -> PanelPlaceholder(windowState, windowWidthPx, windowHeightPx, onPlaceholderTap)
-        OverlayWindowState.MINI -> PanelPlaceholder(windowState, windowWidthPx, windowHeightPx, onPlaceholderTap)
-    }
-}
-
-@Composable
-private fun CapsulePlaceholder(unreadCount: Int, accent: androidx.compose.ui.graphics.Color) {
-    val c = LocalAppColors.current
-    Row(
-        modifier = Modifier.padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    OverlayRoot(
+        colors = colors,
+        windowState = windowState,
+        unreadCount = unreadCount,
+        dragging = dragging,
     ) {
-        // 状态灯：第 3 步会换成带慢呼吸的 StatusLamp；这里先用静态圆点，绝不做闪烁。
-        Box(
-            modifier = Modifier
-                .width(8.dp)
-                .height(8.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(if (unreadCount > 0) accent else c.muted),
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = if (unreadCount > 0) unreadCount.toString() else "—",
-            color = c.textPrimary,
-            fontSize = 16.sp,
-            fontFamily = LocalMonoFamily.current,
-        )
-    }
-}
+        when (windowState) {
+            OverlayWindowState.CAPSULE -> CollapsedCapsule(
+                unreadCount = unreadCount,
+                unreadTagColor = unreadTagColor,
+                animateLamp = animateLamp,
+            )
 
-@Composable
-private fun PanelPlaceholder(
-    windowState: OverlayWindowState,
-    windowWidthPx: Int,
-    windowHeightPx: Int,
-    onPlaceholderTap: () -> Unit,
-) {
-    val c = LocalAppColors.current
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .width(3.dp)
-                    .height(14.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(c.accent),
+            OverlayWindowState.PANEL, OverlayWindowState.MINI -> ExpandedPanel(
+                colors = colors,
+                title = if (windowState == OverlayWindowState.MINI) MINI_TITLE else PANEL_TITLE,
+                tags = tags,
+                selectedTagIds = selectedTagIds,
+                onToggleTag = onToggleTag,
+                onSelectAll = onSelectAll,
+                filterVisible = filterVisible,
+                messageCount = messageCount,
+                unreadCount = unreadCount,
+                compact = windowState == OverlayWindowState.MINI,
+                onToggleFilter = onToggleFilter,
+                onOpenSettings = onOpenSettings,
+                onClearMessages = onClearMessages,
+                onCollapse = onCollapse,
+                content = messageList,
             )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = if (windowState == OverlayWindowState.MINI) "小窗态" else "面板态",
-                color = c.textPrimary,
-                fontSize = 15.sp,
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                text = windowWidthPx.toString() + "×" + windowHeightPx,
-                color = c.textSecondary,
-                fontSize = 12.sp,
-                fontFamily = LocalMonoFamily.current,
-            )
-        }
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(6.dp))
-                .background(c.panelElevated),
-            contentAlignment = Alignment.Center,
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = "第 2 步：窗口与手势已就绪",
-                    color = c.textSecondary,
-                    fontSize = 13.sp,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = "单击 / 双击 / 拖动 / 长按 均可测试",
-                    color = c.textSecondary,
-                    fontSize = 12.sp,
-                )
-                Spacer(Modifier.height(10.dp))
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(c.accent.copy(alpha = 0.14f))
-                        .border(1.dp, c.accent.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                ) {
-                    Text(text = "点这里触发一次单击", color = c.accent, fontSize = 12.sp)
-                }
-            }
         }
     }
 }
+
+/** 面板半透明度：0.96 —— 隐约透出底层内容，但不影响文字可读性。 */
+private const val PANEL_ALPHA = 0.96f
+
+private const val PANEL_TITLE = "通知中继终端"
+private const val MINI_TITLE = "终端 · 小窗"

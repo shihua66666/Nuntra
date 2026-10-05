@@ -1,0 +1,124 @@
+package com.shihua66666.nuntra.ui.overlay
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.shihua66666.nuntra.model.TagView
+import com.shihua66666.nuntra.ui.theme.LocalAppColors
+import com.shihua66666.nuntra.ui.theme.LocalMonoFamily
+
+/**
+ * 展开态终端面板。
+ *
+ * 结构（自上而下）：
+ *   标题栏 —— 左侧强调色竖条 + 标题；右侧当前筛选摘要（等宽字体）。
+ *   筛选栏 —— [TagFilterBar]，条目来自用户标签（可折叠隐藏）。
+ *   内容区 —— 由 [content] 注入（第 4 步接入 MessageList；当前为占位）。
+ *   底部操作栏 —— [PanelBottomBar]。
+ *
+ * 面板态与小窗态**共用本组件**：两者只是窗口尺寸不同（由 OverlayWindowController 控制），
+ * 内部布局一致。小窗态下通过 [compact] 收紧内边距，避免内容被挤得局促。
+ */
+@Composable
+fun ExpandedPanel(
+    colors: com.shihua66666.nuntra.ui.theme.AppColors,
+    title: String,
+    tags: List<TagView>,
+    selectedTagIds: Set<String>,
+    onToggleTag: (String) -> Unit,
+    onSelectAll: () -> Unit,
+    filterVisible: Boolean,
+    messageCount: Int,
+    unreadCount: Int,
+    compact: Boolean,
+    onToggleFilter: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onClearMessages: () -> Unit,
+    onCollapse: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val c = LocalAppColors.current
+    val mono: FontFamily = LocalMonoFamily.current
+    val horizontalPadding = if (compact) 10.dp else 12.dp
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // ── 标题栏 ──
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = horizontalPadding, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(14.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(c.accent),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(text = title, color = c.textPrimary, fontSize = 15.sp)
+            Spacer(Modifier.weight(1f))
+            // 筛选摘要：让用户一眼知道当前是不是「只看某些标签」
+            Text(
+                text = filterSummary(selectedTagIds.size, messageCount, unreadCount),
+                color = c.textSecondary,
+                fontSize = 11.sp,
+                fontFamily = mono,
+            )
+        }
+
+        // ── 筛选栏（可隐藏）──
+        if (filterVisible) {
+            TagFilterBar(
+                tags = tags,
+                selectedTagIds = selectedTagIds,
+                onToggleTag = onToggleTag,
+                onSelectAll = onSelectAll,
+            )
+        }
+
+        // ── 内容区 ──
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(horizontal = horizontalPadding),
+        ) {
+            content()
+        }
+
+        // ── 底部操作栏 ──
+        PanelBottomBar(
+            messageCount = messageCount,
+            filterActive = filterVisible,
+            onToggleFilter = onToggleFilter,
+            onOpenSettings = onOpenSettings,
+            onClearMessages = onClearMessages,
+            onCollapse = onCollapse,
+        )
+    }
+}
+
+/** 标题栏右侧摘要：不显示无意义的前缀，尽可能短。 */
+private fun filterSummary(selectedTagCount: Int, total: Int, unread: Int): String {
+    val filter = if (selectedTagCount > 0) "筛选 " + selectedTagCount else "全部"
+    return filter + " · " + total + " 条 · 未读 " + unread
+}

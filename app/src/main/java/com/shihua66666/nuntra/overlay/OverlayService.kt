@@ -25,9 +25,24 @@ import com.shihua66666.nuntra.MainActivity
 import com.shihua66666.nuntra.R
 import com.shihua66666.nuntra.core.Logx
 import com.shihua66666.nuntra.core.ServiceLocator
-import com.shihua66666.nuntra.ui.overlay.OverlayPlaceholder
-import com.shihua66666.nuntra.ui.overlay.OverlayRoot
-import kotlinx.coroutines.CoroutineScope
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.background
+import com.shihua66666.nuntra.ui.overlay.OverlayContent
+import com.shihua66666.nuntra.ui.theme.LocalAppColors
+import com.shihua66666.nuntra.ui.theme.TagPaletteimport kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -67,6 +82,9 @@ class OverlayService : Service(), OverlayGestureCallbacks {
     @Volatile private var masterSwitchOn: Boolean = false
 
     @Volatile private var unreadCount: Int = 0
+
+    /** 未读消息里优先级最高的标签色（折叠态未读数与状态灯用它着色；null 表示无未读）。 */
+    private var unreadTagColor by mutableStateOf<Color?>(null)
 
     private var uiState by mutableStateOf(OverlayUiState())
 
@@ -150,12 +168,7 @@ class OverlayService : Service(), OverlayGestureCallbacks {
             // 1) 建 ComposeView（此时尚未 attach，生命周期钩子由控制器在正确时机回调）
             val composeView = runCatching {
                 composeHost.createView(colors) {
-                    OverlayContent(
-                        state = uiState,
-                        unread = unreadCount,
-                        sizePx = windowController.sizePx(),
-                        onPlaceholderTap = { onSingleTap() },
-                    )
+                    OverlayServiceContent()
                 }
             }.getOrElse { tr ->
                 Logx.swallow(TAG, "createView", tr)
@@ -260,8 +273,49 @@ class OverlayService : Service(), OverlayGestureCallbacks {
             ServiceLocator.c.messageStore.unreadCount.collectLatest { count ->
                 unreadCount = count
                 updateNotification(count)
+                refreshUnreadTagColor()
             }
         }
+    }
+
+    /**
+     * 刷新「未读里优先级最高的标签色」。
+     *
+     * 规则来自需求：折叠态未读数的颜色 = 当前未读消息里优先级最高的标签颜色。
+     * 无未读时置 null（UI 会退回次要文字色）；标签被删除等异常情况下 TagPalette 会兜底，
+     * 不会抛异常。
+     */
+    private fun refreshUnreadTagColor() {
+        serviceScope.launch {
+            unreadTagColor = runCatching {
+                val tagRepository = ServiceLocator.c.tagRepository
+                val tagId = ServiceLocator.c.messageStore
+                    .highestPriorityUnreadTagId { id -> tagRepository.priorityOf(id) }
+                val hex = tagId?.let { tagRepository.tagById(it)?.color }
+                hex?.let { TagPalette.resolve(it) }
+            }.getOrElse { tr ->
+                Logx.swallow(TAG, "refreshUnreadTagColor", tr)
+                null
+            }
+        }
+    }
+
+    /** 折叠回胶囊态（底栏「折叠」按钮）。 */
+    private fun collapseToCapsule() {
+        if (!windowController.isAttached) return
+        uiState = uiState.withState(OverlayWindowState.CAPSULE)
+        windowController.applyState(OverlayWindowState.CAPSULE)
+    }
+
+    /** 打开设置页（底栏「设置」按钮）：从悬浮窗直接跳到主界面。 */
+    private fun openApp() {
+        runCatching {
+            startActivity(
+                Intent(this, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                },
+            )
+        }.onFailure { Logx.swallow(TAG, "openApp", it) }
     }
 
     // ── 前台通知 ─────────────────────────────────────────────────
@@ -385,29 +439,70 @@ class OverlayService : Service(), OverlayGestureCallbacks {
 }
 
 /**
- * 悬浮窗内容。
+ * 悬浮窗内容：把服务持有的数据与回调接到 UI 容器上。
  *
- * 第 3/4 步会把这里替换成「折叠胶囊 / 终端面板 / 小窗」三套真实组件；
- * 当前用 OverlayPlaceholder 验证窗口与手势链路。
+ * 为什么内容装配放在 Service 内的私有 Composable，而不是 UI 层：
+ *  数据源（MessageStore / TagRepository）与行为（折叠、清空、打开设置）都属于服务职责；
+ *  UI 层保持纯粹（只接收参数），这样第 4 步替换消息列表时不需要动服务以外的代码。
  */
-@androidx.compose.runtime.Composable
-private fun OverlayContent(
-    state: OverlayUiState,
-    unread: Int,
-    sizePx: OverlaySizePx,
-    onPlaceholderTap: () -> Unit,
-) {
-    OverlayRoot(
+@Composable
+private fun OverlayServiceContent() {
+    val colors = ServiceLocator.c.themeController.colors.collectAsState().value
+    val tags by ServiceLocator.c.tagRepository.tags.collectAsState()
+    val messages by ServiceLocator.c.messageStore.sorted.collectAsState()
+    val state = uiState
+    val tagViews = remember(tags, messages) { ServiceLocator.c.messageStore.tagViews(tags) }
+
+    OverlayContent(
+        colors = colors,
         windowState = state.windowState,
-        unreadCount = unread,
+        unreadCount = unreadCount,
+        unreadTagColor = unreadTagColor,
         dragging = state.dragging,
-    ) {
-        OverlayPlaceholder(
-            windowState = state.windowState,
-            unreadCount = unread,
-            windowWidthPx = sizePx.width,
-            windowHeightPx = sizePx.height,
-            onPlaceholderTap = onPlaceholderTap,
-        )
+        tags = tagViews,
+        selectedTagIds = state.selectedTagIds,
+        messageCount = messages.size,
+        filterVisible = state.filterVisible,
+        animateLamp = state.animateLamp,
+        onToggleTag = { tagId ->
+            val current = uiState.selectedTagIds
+            val next = if (tagId in current) current - tagId else current + tagId
+            uiState = uiState.copy(selectedTagIds = next)
+        },
+        onSelectAll = { uiState = uiState.copy(selectedTagIds = emptySet()) },
+        onToggleFilter = { uiState = uiState.withFilterVisible(!uiState.filterVisible) },
+        onOpenSettings = { openApp() },
+        onClearMessages = { ServiceLocator.c.messageStore.clear() },
+        onCollapse = { collapseToCapsule() },
+        messageList = { MessageListSlot(messages.isEmpty()) },
+    )
+}
+
+/**
+ * 消息列表插槽。
+ *
+ * 第 4 步会替换为真正的 MessageList（LazyColumn + 稳定 key + 新消息淡入 + 关键词高亮）。
+ * 现在保留这一层，是为了让「窗口 → 面板 → 内容」整条链路先可在真机上目视验证。
+ */
+@Composable
+private fun MessageListSlot(empty: Boolean) {
+    val c = LocalAppColors.current
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        if (empty) {
+            Text(text = "暂无消息", color = c.textSecondary, fontSize = 13.sp)
+        } else {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(c.panelElevated)
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    text = "消息列表 · 第 4 步接入",
+                    color = c.textSecondary,
+                    fontSize = 12.sp,
+                )
+            }
+        }
     }
 }

@@ -1,0 +1,48 @@
+# ── Gradle ─────────────────────────────────────────────
+.gradle/
+build/
+
+# wrapper jar 必须入库：CI 与本地都靠它保证 Gradle 版本一致。
+# 若你从未生成过它，见 README 的「第一次打开工程」。
+!gradle/wrapper/gradle-wrapper.jar
+
+# ── Android Studio / IntelliJ ──────────────────────────
+.idea/
+*.iml
+*.iws
+*.ipr
+captures/
+.navigation/
+
+# ── Android 构建产物 ───────────────────────────────────
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+output-metadata.json
+local.properties
+release/
+
+# ── NDK / 原生 ─────────────────────────────────────────
+.externalNativeBuild/
+.cxx/
+obj/
+libs/
+
+# ── 签名（绝不入库）────────────────────────────────────
+*.jks
+*.keystore
+keystore.properties
+
+# ── 系统 / 编辑器 ──────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# ── 本工程特有 ─────────────────────────────────────────
+# 提醒音与字体属于本地素材，是否入库由你决定；
+# 若不入库，取消下面两行注释（CI 仍可编译，代码会回退系统资源）
+# app/src/main/res/raw/alert_priority.mp3
+# app/src/main/res/font/ibm_plex_mono_regular.ttf

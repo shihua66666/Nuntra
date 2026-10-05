@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自适应图标前景：终端提示符 + 光标，留出 18% 安全边距 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#C9A96E"
+        android:pathData="M38,44 L50,54 L38,64 L42,68.4 L59,54 L42,39.6 Z" />
+    <path
+        android:fillColor="#D5DCE3"
+        android:pathData="M56,63 L74,63 L74,67.4 L56,67.4 Z" />
+</vector>

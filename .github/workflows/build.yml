@@ -1,0 +1,97 @@
+name: Android CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 必须与 AGP 8.13.2 匹配：AGP 8.x 无法在 Gradle 9.6+ 上运行
+  # （org.gradle.api.problems.internal.InternalProblems 在 Gradle 9.6.0 被移除）。
+  GRADLE_VERSION: "8.13"
+
+jobs:
+  assemble:
+    name: assembleDebug
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # 关键：显式指定 Gradle 版本。
+      # 不使用 gradle/actions/setup-gradle 的自动检测，避免运行器自带的新版 Gradle
+      # 通过 gradle wrapper 覆盖 wrapper 属性（上一版 CI 就是这样失败的）。
+      - name: Set up Gradle ${{ env.GRADLE_VERSION }}
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Prepare Gradle wrapper
+        run: |
+          set -euo pipefail
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            echo "wrapper jar 缺失，使用 Gradle ${GRADLE_VERSION} 生成（版本显式指定，不会漂移）"
+            gradle wrapper --gradle-version "${GRADLE_VERSION}" --distribution-type bin
+          else
+            echo "wrapper jar 已存在，保持不变"
+          fi
+          chmod +x ./gradlew
+          echo "--- 版本自检 ---"
+          ./gradlew --version | tee wrapper-version.txt
+          grep -q "${GRADLE_VERSION}" wrapper-version.txt || {
+            echo "ERROR: wrapper 报告的 Gradle 版本与预期的 ${GRADLE_VERSION} 不一致"
+            exit 1
+          }
+
+      # 隐私红线自检：本项目承诺 100% 离线运行，绝不连网。
+      - name: Privacy gate (no INTERNET permission / no network dependencies)
+        run: |
+          set -euo pipefail
+          echo "1) 检查 AndroidManifest.xml 是否声明 INTERNET 权限"
+          if grep -R "android.permission.INTERNET" app/src/main/AndroidManifest.xml; then
+            echo "ERROR: 发现 INTERNET 权限，违反零网络原则"
+            exit 1
+          fi
+          echo "2) 检查依赖清单是否包含网络库"
+          if grep -RniE "retrofit|okhttp|ktor|volley|firebase|crashlytics|umeng|bugly" \
+             gradle/libs.versions.toml app/build.gradle.kts build.gradle.kts; then
+            echo "ERROR: 发现网络/遥测相关依赖，违反零网络原则"
+            exit 1
+          fi
+          echo "隐私自检通过：无 INTERNET 权限、无网络依赖"
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
+
+      - name: Upload APK
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: nuntra-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload build reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: nuntra-build-reports
+          path: |
+            app/build/reports/**
+            app/build/outputs/logs/**
+          if-no-files-found: ignore
+          retention-days: 7

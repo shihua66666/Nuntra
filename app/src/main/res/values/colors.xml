@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      仅用于 XML 侧（启动主题 / 自适应图标 / ic_launcher_background）。
+      应用内全部配色来自 Compose 主题（ui/theme/AppColors.kt），不从本文件取值。
+    -->
+    <color name="nt_seed_background">#1E2429</color>
+    <color name="nt_seed_panel">#262D33</color>
+    <color name="nt_seed_accent">#C9A96E</color>
+    <color name="ic_launcher_background">#262D33</color>
+</resources>

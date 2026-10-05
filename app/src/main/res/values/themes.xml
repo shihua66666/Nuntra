@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      启动主题：只在 Activity 的 window 阶段使用，避免冷启动白屏。
+      真正的 UI 配色由 Compose 主题提供（ui/theme/NuntraTheme.kt）。
+      锁定深色，不设置 windowBackground 为纯黑。
+    -->
+    <style name="Theme.Nuntra" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/nt_seed_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+
+    <style name="Theme.Nuntra.Transparent" parent="Theme.Nuntra">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+    </style>
+</resources>

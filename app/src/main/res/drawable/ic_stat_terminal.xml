@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  前台服务状态栏小图标：必须是单色（只画 alpha），系统会自行着色。
+  设计：终端提示符 —— 一个右向箭头 + 下划线光标。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4,5 L11,12 L4,19 L6.2,21.2 L15.4,12 L6.2,2.8 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,19 L21,19 L21,21.4 L12,21.4 Z" />
+</vector>

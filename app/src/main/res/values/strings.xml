@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Nuntra</string>
+    <string name="app_subtitle">通知中继终端</string>
+
+    <!-- 前台服务通知渠道 -->
+    <string name="channel_overlay_name">悬浮终端</string>
+    <string name="channel_overlay_desc">保持通知中继终端浮窗运行</string>
+    <string name="channel_priority_name">特殊关注提醒</string>
+    <string name="channel_priority_desc">特殊关注消息的提醒音</string>
+
+    <!-- 前台服务通知 -->
+    <string name="fgs_title">通知中继终端运行中</string>
+    <string name="fgs_text_idle">未读 0 条 · 点击展开面板</string>
+    <string name="fgs_text_unread">未读 %1$d 条 · 点击展开面板</string>
+</resources>

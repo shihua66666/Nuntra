@@ -13,7 +13,7 @@
 |---|---|
 | JDK | **17**（AGP 8.13.2 要求） |
 | Android Studio | 任意较新版本（自带 JBR 可直接用作 Gradle JDK） |
-| Android SDK | Platform 35（compileSdk）+ Build-Tools |
+| Android SDK | **Platform 36**（compileSdk）+ Build-Tools |
 | Gradle | 8.13（见 gradle/wrapper/gradle-wrapper.properties） |
 
 AGP 8.13.2 要求 JDK 17：在 Android Studio 里确认
@@ -21,12 +21,15 @@ AGP 8.13.2 要求 JDK 17：在 Android Studio 里确认
 
 ---
 
-## 1.5 关于 Gradle 版本（请不要随意升级）
+## 1.5 关于 Gradle 与依赖版本（请不要随意升级）
 
 | 组件 | 钉定版本 | 说明 |
 |---|---|---|
 | AGP | 8.13.2 | 你的选择 |
 | Gradle | **8.13** | 必须落在 AGP 8.x 支持区间 |
+| compileSdk | **36** | AGP 8.13.2 支持的上限 |
+| targetSdk | 34 | 你的要求（Android 14） |
+| minSdk | 29 | 你的要求（Android 10） |
 
 **为什么不能升 Gradle**：CI 曾用运行器自带的 Gradle 9.8.0 重新生成 wrapper，导致构建失败：
 
@@ -38,6 +41,32 @@ uses Gradle internal APIs, or use Gradle 9.5.
 
 即：**AGP 8.x 无法在 Gradle 9.6+ 上运行**。若将来要升 Gradle 9.x，必须同时升 AGP 到 9.x，
 那是另一次带 DSL 迁移的升级，不要只改 Gradle 版本。
+
+### 依赖为何停在当前版本（不要「顺手升到最新」）
+
+AndroidX 库的 AAR 里带有 `minCompileSdk` / `minAgpVersion` 元数据，构建时会由
+`checkDebugAarMetadata` 校验。当前这套版本是逐条核对过 AAR 元数据后定下的：
+
+| 依赖 | 版本 | 实测 minCompileSdk |
+|---|---|---|
+| compose-ui / foundation | 1.11.4（BOM 2026.06.01） | 35 |
+| material3 | 1.4.0 | 35 |
+| core-ktx | 1.18.0 | 36 |
+| activity-compose | 1.13.0 | 36 |
+| lifecycle | 2.10.0 | 34–35 |
+| savedstate-ktx | 1.5.0 | 34 |
+| datastore-preferences | 1.2.1 | 34 |
+
+**已被排除的更高版本**（它们要求 AGP ≥ 9.1.0 与 compileSdk 37，会直接构建失败）：
+
+| 依赖 | 版本 | 实测 minCompileSdk |
+|---|---|---|
+| compose-ui / animation / foundation 等 | 1.12.x | 37（且要求 AGP 9.1.0） |
+| core-ktx / core | 1.19.x | 37（且要求 AGP 9.1.0） |
+| lifecycle-* | 2.11.0 | 37（且要求 AGP 9.1.0） |
+
+如果确实需要这些新版本，正确的做法是**整体升级到 AGP 9.x + compileSdk 37 + Gradle 9.x**，
+而不是只改某一个依赖的版本号。
 
 CI 中 Gradle 版本通过 `gradle/actions/setup-gradle` 的 `gradle-version: 8.13` 显式指定，
 并在构建前 `./gradlew --version | grep 8.13` 自检，避免版本再次漂移。
@@ -178,8 +207,9 @@ app/src/main/java/com/shihua66666/nuntra/
 
 本工程在**没有 Android 工具链的机器**上编写，因此以下内容尚未经过编译或真机验证：
 
-1. 未经 Gradle Sync / assembleDebug 验证（首次 Sync 可能需要微调个别依赖版本）。
-2. 依赖版本已按 Maven 元数据核对到最新稳定，但 Compose BOM 与 Kotlin 编译器插件的具体配对需 Sync 确认。
+1. 代码尚未在真机运行过（本仓库在无 Android 工具链的机器上编写）。
+2. 依赖版本已逐条核对 AAR 元数据（见 §1.5），CI 已能通过 `checkDebugAarMetadata`；
+   但 Kotlin 编译与真机行为仍需以 CI / 实机结果为准。
 3. 微信/QQ 通知 extras 的真实字段（`EXTRA_MESSAGES` 键名）需在真机 Logcat 核对，代码已做多键名容错。
 4. ColorOS 自启动/后台活动跳转无公开 API，只能「多候选尝试 + 失败降级到应用详情页」。
 

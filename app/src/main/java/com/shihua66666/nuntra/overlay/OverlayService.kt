@@ -8,56 +8,260 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.res.Configuration
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
+import android.view.View
+import android.view.WindowManager
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.shihua66666.nuntra.MainActivity
 import com.shihua66666.nuntra.R
 import com.shihua66666.nuntra.core.Logx
+import com.shihua66666.nuntra.core.ServiceLocator
+import com.shihua66666.nuntra.ui.overlay.OverlayPlaceholder
+import com.shihua66666.nuntra.ui.overlay.OverlayRoot
+import com.shihua66666.nuntra.ui.theme.AppColors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 悬浮窗前台服务。
  *
- * 第 0 步状态：**只提供可运行的前台服务与通知渠道，尚未挂载 ComposeView 浮窗**。
- * 目的：让 Manifest 里声明的 specialUse 前台服务真实可用，
- * 使「服务可启动 / 可停止」这条链路先跑通，再在第 2 步接入 WindowManager。
+ * 它同时是：
+ *  1. 进程常驻的载体（前台服务 + specialUse 类型）；
+ *  2. 悬浮窗窗口的持有者（WindowManager + ComposeView，见 OverlayWindowController / OverlayComposeHost）；
+ *  3. 主题变更的订阅者（ThemeController 是单例，设置页切主题后这里同步重建内容）。
  *
- * 第 2 步会在这里接入：
- *  · OverlayComposeHost（自实现 LifecycleOwner / SavedStateRegistryOwner / ViewTree* 挂载）
- *  · OverlayWindowController（LayoutParams、拖动、三态尺寸切换、位置持久化）
- *  · 前台通知文案随未读数更新
+ * 与总开关的关系（需求里的总闸）：
+ *  总开关关闭 → MainActivity 调用 stop() → 本服务销毁 → removeView 移除悬浮窗；
+ *  总开关开启 → MainActivity 调用 start() → 本服务 onStartCommand 里挂载悬浮窗。
  */
-class OverlayService : Service() {
+class OverlayService : Service(), OverlayGestureCallbacks {
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    private lateinit var windowManager: WindowManager
+
+    private lateinit var composeHost: OverlayComposeHost
+
+    private lateinit var windowController: OverlayWindowController
+
+    private lateinit var positionStore: OverlayPositionStore
+
+    private lateinit var touchInterceptor: OverlayTouchInterceptor
+
+    private var gesture: OverlayGestureDetector? = null
+
+    /** 总开关读取到的值；用于在权限晚到、或主题变更时决定是否要挂窗口。 */
+    @Volatile private var masterSwitchOn: Boolean = false
+
+    @Volatile private var unreadCount: Int = 0
+
+    private var uiState by mutableStateOf(OverlayUiState())
 
     override fun onCreate() {
         super.onCreate()
-        Logx.i(TAG, "OverlayService onCreate")
+        Logx.i(TAG, "onCreate")
+        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        positionStore = OverlayPositionStore(ServiceLocator.c.appPreferences)
+        composeHost = OverlayComposeHost(applicationContext)
+        windowController = OverlayWindowController(
+            context = applicationContext,
+            windowManager = windowManager,
+            positionStore = positionStore,
+            serviceScope = serviceScope,
+        )
+        touchInterceptor = OverlayTouchInterceptor(applicationContext)
+        gesture = OverlayGestureDetector(applicationContext, this).also { detector ->
+            // 拦截容器在「越阈值开始抢手势」时会调用 beginGesture 同步基准点
+            touchInterceptor.gesture = detector
+        }
         createChannels()
         startForegroundCompat()
+        observeSettings()
+        observeMessages()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
                 Logx.i(TAG, "收到停止指令")
+                // 先移除窗口再停止服务：保证「停止」与「不可见」同时发生。
+                detachOverlay()
                 stopSelf()
                 return START_NOT_STICKY
             }
             else -> Logx.i(TAG, "onStartCommand")
         }
-        updateNotification(unread = 0)
-        // START_STICKY：被系统杀掉后尽量自动重建。
-        // 注意：在 ColorOS 上这条不完全可靠，仍需用户手动加入自启动 / 后台白名单。
+        updateNotification(unreadCount)
+        // 服务启动时做一次消息清理（需求要求触发时机包含「前台服务启动」）
+        serviceScope.launch {
+            runCatching { ServiceLocator.c.messageStore.sweep() }
+                .onFailure { Logx.swallow(TAG, "sweep-on-start", it) }
+        }
+        // 总开关为开时才挂窗口；否则仅保持服务（等待总开关打开）
+        syncOverlay(masterSwitchOn)
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // 屏幕旋转后把窗口夹回屏幕内，否则会「跑到屏幕外 = 用户以为浮窗消失」
+        runCatching { windowController.onConfigurationChanged() }
+            .onFailure { Logx.swallow(TAG, "onConfigurationChanged", it) }
+    }
+
     override fun onDestroy() {
-        Logx.i(TAG, "OverlayService onDestroy")
-        // 第 2 步在这里：先 removeView()，再 owner.onDestroy()，并保存浮窗位置。
+        Logx.i(TAG, "onDestroy")
+        gesture?.release()
+        detachOverlay()
+        serviceScope.cancel()
         super.onDestroy()
+    }
+
+    // ── 悬浮窗挂载 / 卸载 ────────────────────────────────────────
+
+    private fun syncOverlay(shouldShow: Boolean) {
+        if (!shouldShow) {
+            detachOverlay()
+            return
+        }
+        if (windowController.isAttached) return
+        if (!canDrawOverlays()) {
+            Logx.w(TAG, "缺少悬浮窗权限，暂不挂载（用户授权后重启服务即可）")
+            return
+        }
+        serviceScope.launch {
+            val colors = ServiceLocator.c.themeController.current()
+
+            // 1) 建 ComposeView（此时尚未 attach，生命周期钩子由控制器在正确时机回调）
+            val composeView = runCatching {
+                composeHost.createView(colors) {
+                    OverlayContent(
+                        state = uiState,
+                        unread = unreadCount,
+                        sizePx = windowController.sizePx(),
+                        onPlaceholderTap = { onSingleTap() },
+                    )
+                }
+            }.getOrElse { tr ->
+                Logx.swallow(TAG, "createView", tr)
+                null
+            } ?: return@launch
+
+            // 2) 套进触摸拦截容器：拖动与内部点击共存的关键。
+            //    注意每轮只能 addView 一次 —— 拦截容器里只放这一个子 View。
+            touchInterceptor.removeAllViews()
+            touchInterceptor.addView(
+                composeView,
+                android.widget.FrameLayout.LayoutParams(
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                ),
+            )
+
+            // 3) 交给控制器挂载。它内部按「onCreate → addView → onStart」推进生命周期。
+            val attached = windowController.attach(
+                state = uiState.windowState,
+                viewFactory = { _, _ -> touchInterceptor },
+            )
+            if (!attached) {
+                Logx.w(TAG, "悬浮窗挂载失败（权限被撤销或 token 失效）")
+            } else {
+                gesture?.let { touchInterceptor.resetGesture() }
+            }
+        }
+    }
+    private fun detachOverlay() {
+        runCatching { windowController.release() }
+            .onFailure { Logx.swallow(TAG, "detachOverlay", it) }
+    }
+
+    private fun canDrawOverlays(): Boolean = runCatching {
+        Settings.canDrawOverlays(this)
+    }.getOrDefault(false)
+
+    // ── 手势回调 ─────────────────────────────────────────────────
+
+    override fun onSingleTap() {
+        if (!windowController.isAttached) return
+        val next = uiState.windowState.toggleExpanded()
+        uiState = uiState.withState(next)
+        windowController.applyState(next)
+        if (next != OverlayWindowState.CAPSULE) {
+            // 展开面板即视为「已查看」：清未读并刷新前台通知
+            ServiceLocator.c.messageStore.markAllRead()
+        }
+    }
+
+    override fun onDoubleTap() {
+        if (!windowController.isAttached) return
+        val next = uiState.windowState.toggleMini()
+        uiState = uiState.withState(next)
+        windowController.applyState(next)
+    }
+
+    override fun onLongPress() {
+        uiState = uiState.withQuickMenu(!uiState.quickMenuVisible)
+        Logx.d(TAG, "长按快捷菜单：" + uiState.quickMenuVisible)
+    }
+
+    override fun onDragStart() {
+        uiState = uiState.withDragging(true)
+        windowController.setDraggingAlpha(true)
+    }
+
+    override fun onDrag(dx: Int, dy: Int) {
+        windowController.moveBy(dx, dy)
+    }
+
+    override fun onDragEnd() {
+        uiState = uiState.withDragging(false)
+        windowController.setDraggingAlpha(false)
+        windowController.onDragFinished()
+    }
+
+    // ── 设置与状态订阅 ───────────────────────────────────────────
+
+    private fun observeSettings() {
+        val container = ServiceLocator.c
+        serviceScope.launch {
+            container.appPreferences.masterSwitchEnabled
+                .catch { emit(false) }
+                .collectLatest { enabled ->
+                    masterSwitchOn = enabled
+                    Logx.i(TAG, "总开关 = " + enabled)
+                    syncOverlay(enabled)
+                }
+        }
+        // 主题变更：设置页切换后悬浮窗立即生效（同一个 ThemeController 单例）
+        serviceScope.launch {
+            container.themeController.colors.collectLatest { colors ->
+                composeHost.updateTheme(colors)
+            }
+        }
+    }
+
+    private fun observeMessages() {
+        serviceScope.launch {
+            ServiceLocator.c.messageStore.unreadCount.collectLatest { count ->
+                unreadCount = count
+                updateNotification(count)
+            }
+        }
     }
 
     // ── 前台通知 ─────────────────────────────────────────────────
@@ -87,9 +291,9 @@ class OverlayService : Service() {
     /**
      * 启动前台。
      *
-     * targetSdk 34 起必须声明类型；这里用 specialUse（Manifest 已配 subtype property）。
-     * 若类型不匹配会抛 MissingForegroundServiceTypeException，因此包一层兜底：
-     * 最坏情况退化为不带类型的 startForeground，至少不崩溃。
+     * targetSdk 34 起启动前台服务必须声明类型；这里用 specialUse
+     * （Manifest 已配 FOREGROUND_SERVICE_SPECIAL_USE 与 subtype property）。
+     * 任何异常都不能让服务崩：最坏情况退化为不带类型的 startForeground。
      */
     private fun startForegroundCompat() {
         val notification = buildNotification(unread = 0)
@@ -165,7 +369,7 @@ class OverlayService : Service() {
                 }
             }.onFailure { tr ->
                 // Android 12+ 后台启动前台服务会抛 ForegroundServiceStartNotAllowedException，
-                // 这里必须吞掉：用户从 UI 点启动时正常，系统后台限制时不应崩溃。
+                // 用户从 UI 点击时正常，系统后台限制时不应崩。
                 Logx.swallow(TAG, "start", tr)
             }
         }
@@ -177,5 +381,33 @@ class OverlayService : Service() {
                 )
             }.onFailure { tr -> Logx.swallow(TAG, "stop", tr) }
         }
+    }
+}
+
+/**
+ * 悬浮窗内容。
+ *
+ * 第 3/4 步会把这里替换成「折叠胶囊 / 终端面板 / 小窗」三套真实组件；
+ * 当前用 OverlayPlaceholder 验证窗口与手势链路。
+ */
+@androidx.compose.runtime.Composable
+private fun OverlayContent(
+    state: OverlayUiState,
+    unread: Int,
+    sizePx: OverlaySizePx,
+    onPlaceholderTap: () -> Unit,
+) {
+    OverlayRoot(
+        windowState = state.windowState,
+        unreadCount = unread,
+        dragging = state.dragging,
+    ) {
+        OverlayPlaceholder(
+            windowState = state.windowState,
+            unreadCount = unread,
+            windowWidthPx = sizePx.width,
+            windowHeightPx = sizePx.height,
+            onPlaceholderTap = onPlaceholderTap,
+        )
     }
 }

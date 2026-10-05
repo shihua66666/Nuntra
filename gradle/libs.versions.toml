@@ -3,15 +3,26 @@
 agp = "8.13.2"
 kotlin = "2.4.20"
 
-# ── AndroidX（实测最新稳定）──────────────────────────────────────
-coreKtx = "1.19.1"
+# ── AndroidX ─────────────────────────────────────────────────────
+# ⚠ 以下版本已与 AGP 8.13.2 + compileSdk 36 逐一核对过 minCompileSdk。
+# 升级依赖前必须确认目标的 minCompileSdk 不超过 36、minAgpVersion 不超过 8.13.2，
+# 否则会出现 checkDebugAarMetadata 失败（35 条 AAR metadata 冲突就是那样来的）。
+# 当前约束（实测值）：
+#   compose-ui 1.11.4 / material3 1.4.0 / foundation 1.11.4 → minCompileSdk 35
+#   core-ktx 1.18.0 / activity-compose 1.13.0              → minCompileSdk 36
+#   lifecycle 2.10.0                                       → minCompileSdk 34~35
+#   datastore 1.2.1 / savedstate 1.5.0                     → minCompileSdk 34
+# 已被排除的高版本：compose 1.12.x（37 / 需 AGP 9.1）、core-ktx 1.19.x（37）、
+# lifecycle 2.11.0（37）—— 它们都要求 AGP 9.1.0+ 与 compileSdk 37。
+coreKtx = "1.18.0"
 activityCompose = "1.13.0"
-lifecycle = "2.11.0"
+lifecycle = "2.10.0"
 savedstate = "1.5.0"
 datastore = "1.2.1"
 
 # ── Compose（BOM 统一版本；编译器插件版本跟随 Kotlin）────────────
-composeBom = "2026.09.00"
+# 2026.06.01 是最后一条 compose-ui 1.11.x 线（1.12.0 起要求 compileSdk 37 与 AGP 9.1）
+composeBom = "2026.06.01"
 
 # ── 序列化 ────────────────────────────────────────────────────────
 kotlinxSerialization = "1.11.0"

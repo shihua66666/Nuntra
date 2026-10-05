@@ -9,7 +9,8 @@ plugins {
 
 android {
     namespace = "com.shihua66666.nuntra"
-    compileSdk = 35
+    // 36 是 AGP 8.13.2 支持的上限；依赖已按此核对过 minCompileSdk
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.shihua66666.nuntra"
@@ -20,8 +21,11 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // 只打包需要的语言资源（中文 + 英文），减小 APK
-        resourceConfigurations += setOf("zh", "en")
+        // 只打包需要的语言资源（中文 + 英文），减小 APK。
+        // 注意：resourceConfigurations 在新版 AGP 已废弃（CI 里能看到该警告），
+        // 但替代 API androidResources.localeFilters 在 AGP 8.13 上是否可用尚未确认，
+        // 而 AGP 9 又会移除本属性 —— 因此这里先移除该优化：
+        // 全语言资源的 APK 体积代价很小，但换来的是在 AGP 8/9 上都能编译。
     }
 
     buildTypes {

@@ -1,5 +1,11 @@
 package com.shihua66666.nuntra.overlay
 
+import android.content.res.Configuration
+import com.shihua66666.nuntra.ui.theme.OverlayDimens
+
+/** 悬浮窗尺寸（px）。用 px 而不是 dp：WindowManager.LayoutParams 用的是 px。 */
+data class OverlaySizePx(val width: Int, val height: Int)
+
 /**
  * 悬浮窗三种形态。
  *
@@ -18,16 +24,62 @@ enum class OverlayWindowState {
 
     val isExpanded: Boolean get() = this != CAPSULE
 
+    /** 单击：胶囊 ↔ 面板。小窗态单击回到胶囊，避免「单击直接跳大面板」的突兀。 */
     fun toggleExpanded(): OverlayWindowState = when (this) {
         CAPSULE -> PANEL
         PANEL -> CAPSULE
         MINI -> CAPSULE
     }
 
-    /** 双击：胶囊与面板互切，小窗回到胶囊。 */
+    /** 双击：在面板与小窗之间切换；胶囊态双击直接进小窗。 */
     fun toggleMini(): OverlayWindowState = when (this) {
-        MINI -> CAPSULE
+        MINI -> PANEL
         CAPSULE -> MINI
         PANEL -> MINI
+    }
+
+    companion object {
+
+        /**
+         * 计算该形态的窗口尺寸（px）。
+         *
+         * 三种形态都受屏幕尺寸约束：小屏手机上 340dp 面板可能超过可用宽度，
+         * 因此统一用屏幕宽度与高度的比例封顶，避免窗口跑出屏幕。
+         */
+        fun sizeFor(
+            state: OverlayWindowState,
+            configuration: Configuration,
+            density: Float,
+            miniOverride: OverlaySizePx? = null,
+        ): OverlaySizePx {
+            val screenW = configuration.screenWidthDp
+            val screenH = configuration.screenHeightDp
+            return when (state) {
+                CAPSULE -> OverlaySizePx(
+                    width = dp(OverlayDimens.capsuleMinWidth.value, density),
+                    height = dp(OverlayDimens.capsuleHeight.value, density),
+                )
+
+                PANEL -> {
+                    val widthDp = OverlayDimens.panelWidth.value.coerceAtMost(screenW * 0.92f)
+                    val heightDp = OverlayDimens.panelMaxHeight.value.coerceAtMost(screenH * 0.72f)
+                    OverlaySizePx(dp(widthDp, density), dp(heightDp, density))
+                }
+
+                MINI -> {
+                    // 小窗优先用用户上次拖拽后的尺寸，其次用默认值
+                    val fallbackW = OverlayDimens.miniWidth.value.coerceAtMost(screenW * 0.8f)
+                    val fallbackH = OverlayDimens.miniHeight.value.coerceAtMost(screenH * 0.6f)
+                    val w = miniOverride?.width ?: dp(fallbackW, density)
+                    val h = miniOverride?.height ?: dp(fallbackH, density)
+                    OverlaySizePx(
+                        width = w.coerceAtMost(dp(screenW * 0.96f, density)),
+                        height = h.coerceAtMost(dp(screenH * 0.85f, density)),
+                    )
+                }
+            }
+        }
+
+        private fun dp(value: Float, density: Float): Int = (value * density).toInt().coerceAtLeast(1)
     }
 }

@@ -35,8 +35,7 @@ object TagPalette {
      * 做法是把标签色以极低 alpha 叠到二级面板上，而不是直接用一个更暗的纯色 ——
      * 这样在任何主题下都不会出现「色块糊在面板上」的突兀感。
      */
-    fun badgeBackground(colors: AppColors, hex: String): Color =
-        resolve(hex).copy(alpha = 0.14f)
+    fun badgeBackground(hex: String): Color = resolve(hex).copy(alpha = 0.14f)
 
     /** 徽章描边：同色低 alpha，形成细边框而不是大色块。 */
     fun badgeBorder(hex: String): Color = resolve(hex).copy(alpha = 0.35f)

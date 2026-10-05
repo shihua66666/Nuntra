@@ -82,7 +82,10 @@ class AppContainer(private val app: Context) {
 
     val packageManager: PackageManager get() = app.packageManager
 
-    val messageStore: MessageStore by lazy { MessageStore() }
+    val messageStore: MessageStore by lazy {
+        // 排序依赖标签优先级，这里注入一次；lambda 是惰性的，不会造成初始化循环
+        MessageStore(tagPriorityOf = { tagId -> tagRepository.priorityOf(tagId) })
+    }
 
     val tagRepository: TagRepository by lazy { TagRepository(app) }
 

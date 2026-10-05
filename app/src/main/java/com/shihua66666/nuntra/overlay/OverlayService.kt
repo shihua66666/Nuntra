@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.background
+import com.shihua66666.nuntra.ui.overlay.MessageList
 import com.shihua66666.nuntra.ui.overlay.OverlayContent
 import com.shihua66666.nuntra.ui.theme.LocalAppColors
 import com.shihua66666.nuntra.ui.theme.TagPalette
@@ -439,38 +440,20 @@ class OverlayService : Service(), OverlayGestureCallbacks {
             onToggleFilter = { uiState = uiState.withFilterVisible(!uiState.filterVisible) },
             onOpenSettings = { openApp() },
             onClearMessages = { ServiceLocator.c.messageStore.clear() },
-            onCollapse = { collapseToCapsule() },
-            messageList = { MessageListSlot(messages.isEmpty()) },
+                onCollapse = { collapseToCapsule() },
+            messageList = {
+                MessageList(
+                    tags = tags,
+                    selectedTagIds = state.selectedTagIds,
+                    messages = messages,
+                    // 展开面板时已整体标记过已读；这里覆盖「展开后新到」的消息。
+                    // 第 5 步会在此基础上加 contentIntent.send() 跳转原 App。
+                    onMessageClick = { message ->
+                        ServiceLocator.c.messageStore.markRead(message.id)
+                    },
+                )
+            },
         )
-    }
-
-    /**
-     * 消息列表插槽。
-     *
-     * 第 4 步会替换为真正的 MessageList（LazyColumn + 稳定 key + 新消息淡入 + 关键词高亮）。
-     * 现在保留这一层，是为了让「窗口 → 面板 → 内容」整条链路先可在真机上目视验证。
-     */
-    @Composable
-    private fun MessageListSlot(empty: Boolean) {
-        val c = LocalAppColors.current
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            if (empty) {
-                Text(text = "暂无消息", color = c.textSecondary, fontSize = 13.sp)
-            } else {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(c.panelElevated)
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                ) {
-                    Text(
-                        text = "消息列表 · 第 4 步接入",
-                        color = c.textSecondary,
-                        fontSize = 12.sp,
-                    )
-                }
-            }
-        }
     }
 
     companion object {

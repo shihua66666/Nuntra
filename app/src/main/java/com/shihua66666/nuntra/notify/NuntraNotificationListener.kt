@@ -172,9 +172,8 @@ class NuntraNotificationListener : NotificationListenerService() {
                     isPriority = isPriority,
                 )
 
-                val stored = ServiceLocator.c.messageStore.add(message) { tagId ->
-                    ServiceLocator.c.tagRepository.priorityOf(tagId)
-                }
+                // 标签优先级已由 MessageStore 构造时注入，这里不再传递
+                val stored = ServiceLocator.c.messageStore.add(message)
                 if (!stored) return@runCatching
 
                 pendingIntents.remember(sbn, dedupKey)

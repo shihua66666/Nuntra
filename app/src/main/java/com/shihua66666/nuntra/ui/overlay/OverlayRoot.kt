@@ -79,6 +79,12 @@ fun OverlayContent(
     onOpenSettings: () -> Unit,
     onClearMessages: () -> Unit,
     onCollapse: () -> Unit,
+    /**
+     * 消息列表插槽。
+     *
+     * 点击行为（标记已读 / 第 5 步的跳转）由插槽内部实现，
+     * 因此这里不再单独暴露 onMessageClick，避免出现两个语义重复的回调。
+     */
     messageList: @Composable () -> Unit,
 ) {
     OverlayRoot(

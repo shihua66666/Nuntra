@@ -52,6 +52,7 @@ fun ExpandedPanel(
     onOpenSettings: () -> Unit,
     onClearMessages: () -> Unit,
     onCollapse: () -> Unit,
+    /** 消息列表插槽：点击行为由插槽内部实现（标记已读 / 第 5 步跳转）。 */
     content: @Composable () -> Unit,
 ) {
     val c = LocalAppColors.current

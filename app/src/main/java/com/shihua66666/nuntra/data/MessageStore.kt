@@ -19,7 +19,17 @@ import java.util.LinkedHashSet
  *
  * 线程安全：所有写操作都在 [lock] 同步块内完成，读操作读不可变 List 快照。
  */
-class MessageStore {
+class MessageStore(
+    /**
+     * 标签优先级查询。
+     *
+     * 作为构造参数注入而不是每个方法临时传入：
+     *  publishLocked() 在 add / sweep / markRead / clear 等多处被调用，
+     *  只要有一处忘了传，排序就会静默退化成「纯按时间」—— 这正是之前的缺陷。
+     *  注入后只有一个来源，不可能漏。
+     */
+    private val tagPriorityOf: (String) -> Int = { Int.MAX_VALUE },
+) {
 
     private val lock = Any()
 
@@ -75,7 +85,7 @@ class MessageStore {
      *
      * @return true 表示真的入库；false 表示被去重或内容为空。
      */
-    fun add(message: TerminalMessage, tagPriorityOf: (String) -> Int): Boolean {
+    fun add(message: TerminalMessage): Boolean {
         val body = message.body.trim()
         if (message.contact.isNullOrBlank() && body.isEmpty()) {
             // 既没有联系人也没有正文：存下来也没有展示价值，直接丢弃。
@@ -95,7 +105,7 @@ class MessageStore {
             _messages = _messages + message
             trimByCountLocked()
             if (!message.read) unread.add(message.id)
-            publishLocked(tagPriorityOf)
+            publishLocked()
             return true
         }
     }
@@ -198,7 +208,7 @@ class MessageStore {
         unread.retainAll(alive)
     }
 
-    private fun publishLocked(tagPriorityOf: (String) -> Int = { Int.MAX_VALUE }) {
+    private fun publishLocked() {
         val snapshot = _messages
         _sorted.value = snapshot.sortedWith(
             compareBy<TerminalMessage> { tagPriorityOf(it.tagId) }

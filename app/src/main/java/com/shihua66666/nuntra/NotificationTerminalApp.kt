@@ -1,6 +1,7 @@
 package com.shihua66666.nuntra
 
 import android.app.Application
+import com.shihua66666.nuntra.core.CrashRecorder
 import com.shihua66666.nuntra.core.Logx
 import com.shihua66666.nuntra.core.ServiceLocator
 
@@ -18,6 +19,9 @@ class NotificationTerminalApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // ★ 最先安装崩溃记录：之后任何线程的未捕获异常都会被写到磁盘，下次启动可读出展示。
+        //   悬浮窗 Compose 的异步渲染崩溃无法被调用处 try-catch 捕获，只能靠它。
+        runCatching { CrashRecorder.install(this) }
         ServiceLocator.init(this)
         ServiceLocator.warmUp()
         Logx.i("App", "Nuntra 启动 versionCode=" + BuildConfig.VERSION_CODE + " versionName=" + BuildConfig.VERSION_NAME)

@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.shihua66666.nuntra.core.CrashRecorder
 import com.shihua66666.nuntra.core.Logx
 import com.shihua66666.nuntra.core.NtToast
 import com.shihua66666.nuntra.core.ServiceLocator
@@ -32,6 +33,7 @@ import com.shihua66666.nuntra.monitor.SmsAppResolver
 import com.shihua66666.nuntra.overlay.OverlayOrchestrator
 import com.shihua66666.nuntra.overlay.OverlayService
 import com.shihua66666.nuntra.perm.PermissionChecker
+import com.shihua66666.nuntra.ui.CrashReportScreen
 import com.shihua66666.nuntra.ui.MainScreen
 import com.shihua66666.nuntra.ui.NuntraNavHost
 import com.shihua66666.nuntra.ui.Screen
@@ -107,7 +109,22 @@ private fun NuntraApp(
 
     NuntraTheme(colors = colors) {
         Surface(modifier = Modifier.fillMaxSize()) {
-            if (container == null) {
+            // ★ 最高优先级：上次运行如果崩过，先把完整堆栈展示出来。
+            //   悬浮窗 Compose 的异步崩溃现场看不到任何提示，只能靠这次上报。
+            var crashReport by remember {
+                mutableStateOf(
+                    runCatching { CrashRecorder.lastCrash(ServiceLocator.context) }.getOrNull(),
+                )
+            }
+            if (crashReport != null) {
+                CrashReportScreen(
+                    report = crashReport!!,
+                    onDismiss = {
+                        runCatching { CrashRecorder.clear(ServiceLocator.context) }
+                        crashReport = null
+                    },
+                )
+            } else if (container == null) {
                 // ── 初始化失败：显示原因，而不是白屏或闪退 ──
                 InitFailureScreen(
                     reason = ServiceLocator.initFailure,

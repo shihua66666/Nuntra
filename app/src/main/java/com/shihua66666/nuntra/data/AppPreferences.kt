@@ -111,9 +111,23 @@ class AppPreferences(private val context: Context) {
      */
     val masterSwitchEnabled: Flow<Boolean> = store.data.map { it[KEY_MASTER_SWITCH] ?: false }
 
-    suspend fun setMasterSwitchEnabled(value: Boolean) = runCatching {
+    /**
+     * 写入总开关。
+     *
+     * ★ 与其它 setter 不同，这里**失败时向上抛**而不是吞掉：
+     *   总开关是用户唯一的关键操作，必须能给出明确反馈（调用方会转成 Toast）；
+     *   静默失败会让用户看到「点了没反应」而完全无从排查。
+     */
+    suspend fun setMasterSwitchEnabled(value: Boolean) {
+        Logx.i("AppPreferences", "写入总开关 = " + value + " …")
         store.edit { it[KEY_MASTER_SWITCH] = value }
-    }.onFailure { Logx.swallow("AppPreferences", "setMasterSwitchEnabled", it) }
+        // 立即回读确认落盘（同一次 edit 返回后读到的就是新值）
+        val readBack = store.data.first()[KEY_MASTER_SWITCH]
+        Logx.i("AppPreferences", "写入完成，回读 = " + readBack)
+        if (readBack != value) {
+            throw IllegalStateException("写入未生效：期望 " + value + " 实际 " + readBack)
+        }
+    }
 
     // ── 监控范围（分闸）：四个来源各自独立 ──────────────────────
     /** 微信：默认开。 */

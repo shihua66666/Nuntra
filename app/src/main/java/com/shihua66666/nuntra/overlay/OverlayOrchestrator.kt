@@ -72,17 +72,26 @@ object OverlayOrchestrator {
                     NtToast.show(context, "未授予通知权限：常驻通知可能不显示")
                 }
                 Logx.i(TAG, "总开关开启：已请求启动前台服务")
+                // 成功路径才给正反馈；失败路径在下面的 catch 里单独提示
+                NtToast.show(context, "已开启监控")
             } catch (tr: Throwable) {
-                // Android 12+ 的后台启动限制会抛 ForegroundServiceStartNotAllowedException，
-                // 这里必须完全兜住：吞掉 + 提示 + 回滚开关，绝不让它冒泡。
-                Logx.swallow(TAG, "setMasterSwitch-start", tr)
-                NtToast.show(context, "服务启动被系统限制，请把应用切到前台后重试")
+                // Android 12+ 的后台启动限制会抛 ForegroundServiceStartNotAllowedException。
+                // ★ 不静默：把异常类名与消息直接弹给用户（细节仍在日志里）。
+                Logx.e(TAG, "启动前台服务失败", tr)
+                NtToast.show(
+                    context,
+                    "启动服务失败：" + tr.javaClass.simpleName + " / " + (tr.message ?: "无消息"),
+                )
                 rollbackSwitch(scope)
             }
             onFinished?.invoke()
         }.onFailure { tr ->
-            Logx.swallow(TAG, "setMasterSwitch", tr)
-            NtToast.show(context, "操作失败，请稍后重试")
+            // ★ 同样不静默：编排器自身任何异常都要让用户看到
+            Logx.e(TAG, "setMasterSwitch 异常", tr)
+            NtToast.show(
+                context,
+                "开关操作异常：" + tr.javaClass.simpleName + " / " + (tr.message ?: "无消息"),
+            )
             runCatching { onFinished?.invoke() }
         }
     }
@@ -93,10 +102,15 @@ object OverlayOrchestrator {
      * 不做回滚的后果很严重 —— 开关显示「开」但服务没起来，
      * 用户会反复点、反复失败，且下次启动 App 会误以为应当自动运行。
      */
-    private fun rollbackSwitch(scope: CoroutineScope) {
+    private fun rollbackSwitch(scope: CoroutineScope, reason: String = "操作未成功") {
         scope.launch {
             runCatching { ServiceLocator.appContainerOrNull?.appPreferences?.setMasterSwitchEnabled(false) }
-                .onFailure { Logx.swallow(TAG, "rollbackSwitch", it) }
+                .onFailure { tr ->
+                    // 回滚失败会让状态卡在「开」，必须让用户知道
+                    Logx.e(TAG, "回滚开关失败", tr)
+                    NtToast.show(null, "回滚开关状态失败：" + tr.javaClass.simpleName)
+                }
+            Logx.i(TAG, "开关已回滚为关闭（原因：" + reason + "）")
         }
     }
 }

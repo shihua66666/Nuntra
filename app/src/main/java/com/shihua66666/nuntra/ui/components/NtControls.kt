@@ -130,6 +130,8 @@ fun NtSwitchRow(
     val applyToggle: (Boolean, String) -> Unit = { expected, source ->
         debugSeq += 1
         if (debugToast) {
+            // 只输出「事件是否到达」，不附加任何业务文案 ——
+            // 否则权限缺失时会与业务 Toast 同时弹出两条互相矛盾的提示。
             NtToast.show(context, "#" + debugSeq + " " + source + " → 目标=" + expected + " 当前=" + checked)
         }
         if (!enabled) {

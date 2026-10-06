@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.shihua66666.nuntra.core.Logx
+import com.shihua66666.nuntra.core.NtToast
 import com.shihua66666.nuntra.core.ServiceLocator
 import com.shihua66666.nuntra.monitor.SmsAppResolver
 import com.shihua66666.nuntra.overlay.OverlayOrchestrator
@@ -132,7 +133,16 @@ private fun AppContent(
     val messages by container.messageStore.sorted.collectAsState()
     val unread by container.messageStore.unreadCount.collectAsState()
 
-    val masterSwitchEnabled by container.appPreferences.masterSwitchEnabled.collectAsState(initial = false)
+    val masterSwitchStored by container.appPreferences.masterSwitchEnabled.collectAsState(initial = false)
+
+    // ★ 乐观更新：点击立刻改变开关外观，不等 DataStore 写盘回流。
+    //   原因：用户已经确认「点击进来了但开关不亮」，说明问题在写入/回流环节；
+    //   把「点亮」与「落盘」解耦后：
+    //     · 写入成功 → 无感（本地覆盖值随后被存储值覆盖，两者相同）；
+    //     · 写入失败 → 本地覆盖值被清空 + Toast 报错，开关回到真实状态。
+    //   这样「开关能不能亮」不再取决于写盘是否成功，便于把问题彻底分离。
+    var pendingMaster by remember { mutableStateOf<Boolean?>(null) }
+    val masterSwitchEnabled: Boolean = pendingMaster ?: masterSwitchStored
     val monitorWechat by container.appPreferences.monitorWechat.collectAsState(initial = true)
     val monitorQq by container.appPreferences.monitorQq.collectAsState(initial = true)
     val monitorWeCom by container.appPreferences.monitorWeCom.collectAsState(initial = false)
@@ -157,13 +167,36 @@ private fun AppContent(
             .getOrElse { com.shihua66666.nuntra.monitor.SmsAppResolver.Resolution(emptySet(), false) }
     }
 
-    // 总开关统一走编排器：它内部做权限检查、异常兜底与状态回滚
+    // 总开关统一走编排器：它内部做权限检查、异常兜底与状态回滚。
+    // 这里额外做「乐观更新 + 逐步可见的错误反馈」。
     val applyMaster: (Boolean) -> Unit = { enabled ->
-        OverlayOrchestrator.setMasterSwitch(
-            context = ServiceLocator.context,
-            enabled = enabled,
-            scope = scope,
-        )
+        val ctx = ServiceLocator.context
+        // ① 立刻更新外观（乐观更新）—— 用户先看到开关亮了，再等落盘结果
+        pendingMaster = enabled
+        scope.launch {
+            try {
+                // ② 落盘（内部会回读校验，失败即抛）
+                container.appPreferences.setMasterSwitchEnabled(enabled)
+                // ③ ★ 先清空覆盖值：让 UI 立刻以「已落盘的真实值」为准，
+                //    避免「服务启动较慢时开关一直停留在乐观值」。
+                //    由于落盘已完成，此时读到的存储值必然等于期望值，不会闪回。
+                pendingMaster = null
+                // ④ 再交给编排器启动/停止服务（它内部会 Toast 告知失败原因）
+                OverlayOrchestrator.setMasterSwitch(
+                    context = ctx,
+                    enabled = enabled,
+                    scope = scope,
+                )
+            } catch (tr: Throwable) {
+                // ★ 绝不静默：把异常类名与消息直接弹出来
+                Logx.e("MainActivity", "总开关操作失败", tr)
+                NtToast.show(
+                    ctx,
+                    "写入失败：" + tr.javaClass.simpleName + " / " + (tr.message ?: "无消息"),
+                )
+                pendingMaster = null
+            }
+        }
     }
 
     NuntraNavHost(

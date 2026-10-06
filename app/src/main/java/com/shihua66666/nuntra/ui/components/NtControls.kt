@@ -123,6 +123,10 @@ fun NtSwitchRow(
     val colors = LocalAppColors.current
     val context = LocalContext.current
 
+    // 故意用「进程级」计数器而不是 remember：
+    //   若界面存在两个 NtSwitchRow 实例（重复组合 / 双目的地同时渲染），
+    //   remember 版会各自从 0 开始，序号看起来正常；
+    //   进程级计数则会明显跳跃，从而暴露「一次点击被处理了多次」。
     var debugSeq by remember { mutableStateOf(0) }
     var lastAppliedAt by remember { mutableLongStateOf(0L) }
     var lastExpected by remember { mutableStateOf<Boolean?>(null) }
@@ -144,7 +148,20 @@ fun NtSwitchRow(
             } else {
                 lastAppliedAt = now
                 lastExpected = expected
-                onCheckedChange(expected)
+                // ★ 调用回调前后都留痕：
+                //   若只看到「准备调用」而看不到「已调用」，说明回调内部抛了异常；
+                //   若两个都看到但界面没变，说明问题在上层状态传递。
+                if (debugToast) NtToast.show(context, "#" + debugSeq + " 准备调用 onCheckedChange(" + expected + ")")
+                try {
+                    onCheckedChange(expected)
+                    if (debugToast) NtToast.show(context, "#" + debugSeq + " onCheckedChange 已返回")
+                } catch (tr: Throwable) {
+                    // 回调抛异常曾经被完全吞掉 —— 这里必须让用户看到
+                    NtToast.show(
+                        context,
+                        "#" + debugSeq + " 回调异常：" + tr.javaClass.simpleName + " / " + (tr.message ?: "无消息"),
+                    )
+                }
             }
         }
     }

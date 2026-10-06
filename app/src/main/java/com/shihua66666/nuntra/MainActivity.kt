@@ -125,6 +125,7 @@ private fun AppContent(
     container: com.shihua66666.nuntra.core.AppContainer,
     resumeTick: Int,
     onRequestResumeRefresh: () -> Unit,
+    colors: AppColors,
 ) {
     val scope = ServiceLocator.appScope
     var screen by remember { mutableStateOf<Screen>(Screen.Home) }
@@ -170,18 +171,24 @@ private fun AppContent(
     // 总开关统一走编排器：它内部做权限检查、异常兜底与状态回滚。
     // 这里额外做「乐观更新 + 逐步可见的错误反馈」。
     val applyMaster: (Boolean) -> Unit = { enabled ->
+        // 全链路打点：即使后续任何一步异常，也能从 Toast 序号看出死在哪一环
+        NtToast.show(ServiceLocator.context, "#11 进入 applyMaster，目标=" + enabled)
         val ctx = ServiceLocator.context
         // ① 立刻更新外观（乐观更新）—— 用户先看到开关亮了，再等落盘结果
         pendingMaster = enabled
+        NtToast.show(ctx, "#11b 乐观状态已写入，pending=" + pendingMaster + "，当前显示=" + (pendingMaster ?: masterSwitchStored))
         scope.launch {
             try {
                 // ② 落盘（内部会回读校验，失败即抛）
+                NtToast.show(ctx, "#12 正在写入 DataStore")
                 container.appPreferences.setMasterSwitchEnabled(enabled)
+                NtToast.show(ctx, "#12b DataStore 写入并回读成功")
                 // ③ ★ 先清空覆盖值：让 UI 立刻以「已落盘的真实值」为准，
                 //    避免「服务启动较慢时开关一直停留在乐观值」。
                 //    由于落盘已完成，此时读到的存储值必然等于期望值，不会闪回。
                 pendingMaster = null
                 // ④ 再交给编排器启动/停止服务（它内部会 Toast 告知失败原因）
+                NtToast.show(ctx, "#13 准备启动前台服务")
                 OverlayOrchestrator.setMasterSwitch(
                     context = ctx,
                     enabled = enabled,
@@ -235,7 +242,7 @@ private fun AppContent(
         },
         homeContent = {
             MainScreen(
-                colors = colorsOf(container),
+                colors = colors,
                 readiness = readiness,
                 masterSwitchEnabled = masterSwitchEnabled,
                 messageCount = messages.size,
@@ -262,10 +269,6 @@ private fun AppContent(
     )
 }
 
-/** 读取当前主题色（容器已确认非空，这里再兜一层）。 */
-@Composable
-private fun colorsOf(container: com.shihua66666.nuntra.core.AppContainer): AppColors =
-    container.themeController.colors.collectAsState().value
 
 /**
  * 初始化失败页。

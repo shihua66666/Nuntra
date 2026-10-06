@@ -147,6 +147,13 @@ private fun MasterSwitchPanel(
             onCheckedChange = onToggle,
             debugToast = true,
         )
+        // ★ 临时诊断行：把「界面拿到的开关值」直接画出来。
+        //   若这里显示 false 而你刚点过 → 值没传到 UI（状态回流/重组问题）；
+        //   若显示 true 但开关仍是灰的 → Switch 渲染问题。
+        NtMono(
+            text = "[诊断] enabled=" + enabled + "  serviceRunning=" + serviceRunning,
+            color = c.warning,
+        )
         Spacer(Modifier.height(8.dp))
         NtDivider()
         Spacer(Modifier.height(8.dp))

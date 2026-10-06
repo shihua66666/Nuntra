@@ -264,6 +264,10 @@ class OverlayService : Service(), OverlayGestureCallbacks {
                 viewFactory = { _, _ -> touchInterceptor },
             )
             setWindowAttached(attached)
+            // 挂载成功 → 清除崩溃自愈标记；失败 → 置位，下次启动会自动关闭总开关
+            runCatching {
+                ServiceLocator.c.appPreferences.setOverlayCrashFlag(!attached)
+            }
             if (!attached) {
                 // 具体异常已由 OverlayWindowController 弹出，这里只补一条上下文
                 Logx.w(TAG, "悬浮窗挂载失败（权限被撤销或 token 失效）")

@@ -33,7 +33,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Scaffold
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.layout.width
+import com.shihua66666.nuntra.core.CrashRecorder
+import com.shihua66666.nuntra.core.NtToast
 import com.shihua66666.nuntra.perm.PermissionNavigator
+import com.shihua66666.nuntra.ui.SafeCrashReportScreen
 import androidx.compose.ui.Modifier
 import com.shihua66666.nuntra.model.ReadinessSnapshot
 import com.shihua66666.nuntra.ui.components.NtButton
@@ -146,6 +149,8 @@ fun SettingsScreen(
                 note = "默认保留最近 24 小时，条数上限默认 200，可调。",
             )
 
+            CrashDiagnosticsSection()
+
             PermissionSection(
                 readiness = readiness,
                 resumeTick = resumeTick,
@@ -168,6 +173,73 @@ private fun PlaceholderSection(title: String, note: String) {
         SectionHeader(title = title)
         Spacer(Modifier.height(6.dp))
         NtCaption(text = note)
+    }
+}
+
+/**
+ * 诊断分区：**只在用户主动点击时**才读取并展示崩溃记录。
+ *
+ * 为什么不放在启动路径（血泪教训）：
+ *  上一版在 MainActivity 的组合期读取并渲染崩溃页，一旦该页自身抛异常，
+ *  就变成「每次启动必崩」的死循环，用户连主界面都进不去。
+ *  现在读取与渲染都由这里的一次点击触发，最坏情况也只是这一屏出问题。
+ *
+ * 同时给出日志文件的**绝对路径**，方便 App 完全进不去时用文件管理器/adb 取走。
+ */
+@Composable
+private fun CrashDiagnosticsSection() {
+    val context = LocalContext.current
+    val c = LocalAppColors.current
+    var report by remember { mutableStateOf<String?>(null) }
+    var showReport by remember { mutableStateOf(false) }
+    var paths by remember { mutableStateOf<Pair<String, String?>?>(null) }
+
+    NtPanel(modifier = Modifier.fillMaxWidth()) {
+        SectionHeader(title = "诊断")
+        Spacer(Modifier.height(6.dp))
+        NtCaption(text = "崩溃详情只在你点击时读取，不参与启动流程。")
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NtButton(
+                text = "查看上次崩溃",
+                onClick = {
+                    // 读取包在 runCatching 里：失败也只是「没有记录」
+                    report = runCatching { CrashRecorder.readPersisted(context) }.getOrNull()
+                    showReport = report != null
+                    if (report == null) NtToast.show(context, "没有崩溃记录")
+                },
+            )
+            NtButton(
+                text = "显示日志路径",
+                accent = false,
+                onClick = {
+                    paths = runCatching {
+                        CrashRecorder.internalLogPath(context) to CrashRecorder.externalLogPath(context)
+                    }.getOrNull()
+                },
+            )
+        }
+        if (paths != null) {
+            Spacer(Modifier.height(8.dp))
+            NtCaption(text = "内部：" + paths!!.first)
+            NtCaption(text = "外部：" + (paths!!.second ?: "(外部存储不可用)"))
+        }
+        if (showReport && report != null) {
+            Spacer(Modifier.height(10.dp))
+            NtDivider()
+            Spacer(Modifier.height(10.dp))
+            // 用安全包装渲染：即使堆栈内容异常导致渲染失败，也只降级为纯文字
+            SafeCrashReportScreen(
+                report = report!!,
+                onDismiss = {
+                    runCatching { CrashRecorder.clear(context) }
+                    showReport = false
+                    report = null
+                },
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        NtCaption(text = "日志标签（adb logcat -s Nuntra/CrashRecorder）")
     }
 }
 

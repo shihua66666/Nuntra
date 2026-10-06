@@ -129,6 +129,31 @@ class AppPreferences(private val context: Context) {
         }
     }
 
+    // ── 启动自愈标记 ─────────────────────────────────────────────
+    /**
+     * 上一次启动是否在「挂载悬浮窗之后」崩溃。
+     *
+     * 用途：万一悬浮窗渲染持续崩溃，会让用户每次打开 App 都崩、进不去界面。
+     * 启动时读这个标记并自动关闭总开关，保证用户**一定能进 App** 去看崩溃日志。
+     * 读取失败一律按 false 处理，绝不影响启动。
+     */
+    val overlayCrashFlag: Flow<Boolean> = store.data.map { it[KEY_OVERLAY_CRASH] ?: false }
+
+    suspend fun setOverlayCrashFlag(value: Boolean) = runCatching {
+        store.edit { it[KEY_OVERLAY_CRASH] = value }
+    }.onFailure { Logx.swallow("AppPreferences", "setOverlayCrashFlag", it) }
+
+    /**
+     * 同步读取崩溃标记（仅供启动自愈使用）。
+     *
+     * 这里用 runBlocking 是刻意的：它在 Application.onCreate 里执行，
+     * 只读一个布尔值、耗时极小，且必须在本帧之前拿到结果。
+     * 整个调用被 runCatching 包住，任何异常都退化为 false。
+     */
+    fun overlayCrashFlagBlocking(): Boolean = runCatching {
+        kotlinx.coroutines.runBlocking { store.data.first()[KEY_OVERLAY_CRASH] ?: false }
+    }.getOrDefault(false)
+
     // ── 监控范围（分闸）：四个来源各自独立 ──────────────────────
     /** 微信：默认开。 */
     val monitorWechat: Flow<Boolean> = store.data.map { it[KEY_MONITOR_WECHAT] ?: true }
@@ -203,6 +228,7 @@ class AppPreferences(private val context: Context) {
         private val KEY_OVERLAY_W = intPreferencesKey("overlay_width")
         private val KEY_OVERLAY_H = intPreferencesKey("overlay_height")
         private val KEY_MASTER_SWITCH = booleanPreferencesKey("master_switch_enabled")
+        private val KEY_OVERLAY_CRASH = booleanPreferencesKey("overlay_crash_flag")
         private val KEY_MONITOR_WECHAT = booleanPreferencesKey("monitor_wechat")
         private val KEY_MONITOR_QQ = booleanPreferencesKey("monitor_qq")
         private val KEY_MONITOR_WECOM = booleanPreferencesKey("monitor_wecom")

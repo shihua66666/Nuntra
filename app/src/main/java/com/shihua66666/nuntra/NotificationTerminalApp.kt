@@ -19,14 +19,31 @@ class NotificationTerminalApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        // ★ 最先安装崩溃记录：之后任何线程的未捕获异常都会被写到磁盘，下次启动可读出展示。
-        //   悬浮窗 Compose 的异步渲染崩溃无法被调用处 try-catch 捕获，只能靠它。
-        runCatching { CrashRecorder.install(this) }
-        ServiceLocator.init(this)
-        ServiceLocator.warmUp()
-        Logx.i("App", "Nuntra 启动 versionCode=" + BuildConfig.VERSION_CODE + " versionName=" + BuildConfig.VERSION_NAME)
+        // 启动初始化整体包一层：任何一步失败都只记录，绝不让 App 起不来。
+        runCatching {
+            // 1) 崩溃记录（最先）：之后任何线程的未捕获异常都会写到磁盘
+            CrashRecorder.install(this)
+            // 2) 依赖容器
+            ServiceLocator.init(this)
+            // 3) 启动自愈：上次若在挂载悬浮窗后崩过，自动关掉总开关，
+            //    保证「无论悬浮窗出什么问题，用户一定能进 App」。
+            val prefs = ServiceLocator.appContainerOrNull?.appPreferences
+            if (prefs != null && prefs.overlayCrashFlagBlocking()) {
+                Logx.w("App", "检测到上次悬浮窗崩溃，自动关闭总开关以恢复可用")
+                kotlinx.coroutines.runBlocking {
+                    prefs.setMasterSwitchEnabled(false)
+                    prefs.setOverlayCrashFlag(false)
+                }
+            }
+            // 4) 预热（异步，不阻塞）
+            ServiceLocator.warmUp()
+        }.onFailure { tr ->
+            runCatching { Logx.e("App", "启动初始化部分失败（不影响进入界面）", tr) }
+        }
+        runCatching {
+            Logx.i("App", "Nuntra 启动 versionCode=" + BuildConfig.VERSION_CODE + " versionName=" + BuildConfig.VERSION_NAME)
+        }
     }
-
     override fun onTerminate() {
         Logx.i("App", "onTerminate")
         super.onTerminate()

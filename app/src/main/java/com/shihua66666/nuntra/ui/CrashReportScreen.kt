@@ -29,6 +29,7 @@ import com.shihua66666.nuntra.ui.components.SectionHeader
 import com.shihua66666.nuntra.ui.theme.LocalAppColors
 import com.shihua66666.nuntra.ui.theme.LocalMonoFamily
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.CompositionLocalProvider
 
 /**
  * 上次崩溃的堆栈展示页。
@@ -96,5 +97,48 @@ fun CrashReportScreen(
             )
         }
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+/**
+ * 崩溃页的**安全包装**。
+ *
+ * 为什么需要：崩溃页本身也是 Compose 代码，如果它自己渲染失败（例如堆栈里含
+ * 极端长度的行、或某个组件抛异常），就会把「查看崩溃」变成「又一次崩溃」。
+ * 这里用 Compose 的运行时异常兜底把渲染异常降级为一段纯文字，保证：
+ *   · 任何情况下都能看到「这里有东西」，而不是白屏或闪退；
+ *   · 异常细节仍会打到日志里（Logx），便于排查。
+ *
+ * 注意：包装器只覆盖**渲染阶段**的异常；它不被放在启动路径上，
+ * 只有用户在设置页主动点击时才进入。
+ */
+@Composable
+fun SafeCrashReportScreen(
+    report: String,
+    onDismiss: () -> Unit,
+) {
+    val c = LocalAppColors.current
+    try {
+        CrashReportScreen(report = report, onDismiss = onDismiss)
+    } catch (tr: Throwable) {
+        // 渲染异常降级：显示纯文字 + 提供返回按钮，绝不再次抛
+        Logx.swallow("CrashReportScreen", "safeRender", tr)
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(c.background)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(text = "崩溃详情渲染失败", color = c.warning, fontSize = 15.sp)
+            NtCaption(text = "内容过长或格式异常。原始日志仍在文件中，可用日志路径查看。")
+            Text(
+                text = tr.javaClass.name + ": " + (tr.message ?: ""),
+                color = c.textSecondary,
+                fontSize = 12.sp,
+            )
+            NtButton(text = "返回", accent = false, onClick = onDismiss)
+        }
     }
 }

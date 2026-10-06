@@ -2,6 +2,7 @@ package com.shihua66666.nuntra.perm
 
 import android.Manifest
 import android.app.NotificationManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -11,23 +12,22 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.shihua66666.nuntra.core.Logx
 import com.shihua66666.nuntra.model.ReadinessSnapshot
+import com.shihua66666.nuntra.notify.NuntraNotificationListener
 
 /**
  * 权限与关键开关的**只读**检测。
  *
- * 刻意只是检测，不发起申请：申请动作有的要跳设置页、有的要运行时弹窗，
- * 那些放在 PermissionNavigator（第 6 步）里，本类保持纯函数、可随意调用。
+ * 刻意只检测、不发起申请：申请要跳设置页或弹运行时对话框，那些在 PermissionNavigator 里。
+ * 本类保持纯函数，可以被 onResume、首页、设置页随意调用。
  *
- * 全部检测都包了 runCatching：
- * ColorOS 等定制系统在权限被回收后，个别 API 可能抛 SecurityException，
- * 而我们绝不允许「查个权限把应用查崩」。
+ * 全部检测都包了 runCatching：ColorOS / ColorOS 类定制系统在权限被回收后，
+ * 个别 API 可能抛 SecurityException，而「查个权限把应用查崩」是绝对不能接受的。
  */
 object PermissionChecker {
 
     /** 通知使用权是否已授予。 */
     fun hasNotificationAccess(context: Context): Boolean = runCatching {
-        val enabled = NotificationManagerCompat.getEnabledListenerPackages(context)
-        enabled.contains(context.packageName)
+        NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
     }.getOrElse { tr ->
         Logx.swallow("PermissionChecker", "hasNotificationAccess", tr)
         false
@@ -45,8 +45,7 @@ object PermissionChecker {
      * 通知权限是否已授予。
      *
      * Android 13 以下没有这个运行时权限，直接返回 true。
-     * 注意：这里返回 false 只影响「前台服务常驻通知能否显示」，
-     * 不影响服务本身能否启动。
+     * 注意：返回 false 只影响「前台服务常驻通知能否显示」，不影响服务本身能否启动。
      */
     fun hasPostNotifications(context: Context): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
@@ -74,7 +73,25 @@ object PermissionChecker {
         nm?.areNotificationsEnabled() ?: true
     }.getOrElse { true }
 
-    /** 汇总快照。第 2 步接入服务运行状态后 serviceRunning 会有真实值。 */
+    /**
+     * 通知监听服务是否**已被系统绑定**。
+     *
+     * 与 [hasNotificationAccess] 的区别：
+     *  权限已授予 ≠ 服务还活着。系统（尤其 ColorOS）会在某些场景解绑服务，
+     *  此时权限仍在、但收不到任何通知。这个检测用来把这种「假活」状态暴露给用户。
+     */
+    fun isListenerServiceBound(context: Context): Boolean = runCatching {
+        val component = ComponentName(context, NuntraNotificationListener::class.java)
+        val enabled = context.packageManager.getComponentEnabledSetting(component)
+        // 只要不是显式禁用，就认为可能被绑定；真正的「活着」由权限检测兜底
+        enabled != PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+    }.getOrDefault(true)
+
+    /**
+     * 汇总快照。
+     *
+     * @param serviceRunning 悬浮窗前台服务是否在运行（由调用方传入，本类不查询服务状态）
+     */
     fun snapshot(context: Context, serviceRunning: Boolean = false): ReadinessSnapshot = ReadinessSnapshot(
         notificationAccessGranted = hasNotificationAccess(context),
         overlayGranted = canDrawOverlays(context),

@@ -39,17 +39,56 @@ object ServiceLocator {
         CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineName("Nuntra-App"))
     }
 
+    /**
+     * 初始化失败的原因（UI 会展示它）。
+     *
+     * 只在 init 捕获到异常时写入；正常情况下恒为 null。
+     */
+    @Volatile
+    var initFailure: String? = null
+        private set
+
+    /**
+     * 初始化容器。**不抛异常** —— 这是「启动不闪退」的第一道闸门。
+     *
+     * 失败时记录到 [initFailure]，由 UI 显示一句人话，而不是让进程直接死。
+     * Application 阶段（DataStore 损坏、被系统限制等）出问题时同样适用。
+     */
     fun init(context: Context) {
         if (container != null) return
         synchronized(this) {
             if (container != null) return
-            val app = context.applicationContext
-            appContext = app
-            container = AppContainer(app)
+            try {
+                val app = context.applicationContext
+                appContext = app
+                container = AppContainer(app)
+                initFailure = null
+            } catch (tr: Throwable) {
+                val reason = tr.javaClass.simpleName + ": " + (tr.message ?: "")
+                initFailure = reason
+                Logx.e("ServiceLocator", "容器初始化失败：" + reason, tr)
+                container = null
+            }
         }
     }
 
-    /** 进程内一定已初始化；未初始化属于编程错误，应尽早在 Application 修掉。 */
+    /**
+     * 可空访问器：给 UI 层保命用。
+     *
+     * 为什么需要它：如果 Application.onCreate 里初始化失败，直接用 [c]
+     * 会在组合期抛异常 → 界面白屏或闪退，用户连「哪里出错了」都看不到。
+     * UI 层用这个访问器就能显示一句人话。
+     */
+    val appContainerOrNull: AppContainer? get() = container
+
+    /** 初始化是否已完成。 */
+    val isInitialized: Boolean get() = container != null
+
+    /**
+     * 进程内一定已初始化；未初始化属于编程错误。
+     *
+     * 注意：UI 层不要直接用这个，用 [appContainerOrNull] 以免闪退。
+     */
     val c: AppContainer
         get() = container ?: error("ServiceLocator 尚未初始化：请确认 AndroidManifest 的 application android:name 指向 NotificationTerminalApp")
 

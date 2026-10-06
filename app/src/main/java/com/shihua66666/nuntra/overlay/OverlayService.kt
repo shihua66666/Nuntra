@@ -90,9 +90,51 @@ class OverlayService : Service(), OverlayGestureCallbacks {
 
     private var uiState by mutableStateOf(OverlayUiState())
 
+    /**
+     * 启动。**整个初始化过程都在 try-catch 内** —— 这是「不闪退」的第二道闸门。
+     *
+     * 为什么必须这么做：前台服务由系统在任意时刻拉起（START_STICKY 被回收后会重建），
+     * 此时应用可能还没完成初始化（容器未就绪），或系统服务拿不到。
+     * 任何一处未捕获异常都会导致进程被杀 —— 用户看到的就是「启动服务闪退」。
+     */
+    /** 组件是否已初始化完成。未完成时所有窗口操作都要跳过，否则会 NPE。 */
+    private var componentsReady = false
+
     override fun onCreate() {
         super.onCreate()
         Logx.i(TAG, "onCreate")
+
+        // ★ 第一步必须是 startForeground，而且必须在任何可能失败的操作之前。
+        //
+        // 原因：通过 startForegroundService 启动的服务，系统要求**秒级内**调用
+        // startForeground()。如果在它之前先做了一堆初始化并中途失败返回，
+        // 系统会直接杀掉进程（ForegroundServiceDidNotStartInTimeException）——
+        // 表现就是用户说的「点总开关闪退」。
+        //
+        // 这里的前台通知只依赖 strings / drawable，与容器、权限都无关，因此可以先决执行。
+        runCatching { createChannels() }
+            .onFailure { Logx.swallow(TAG, "createChannels", it) }
+        runCatching { startForegroundCompat() }
+            .onFailure { Logx.swallow(TAG, "startForegroundCompat", it) }
+
+        // 第二步才做组件初始化；失败不影响「已进入前台」这一事实。
+        runCatching { initInternal() }.onFailure { tr ->
+            Logx.e(TAG, "组件初始化失败，服务保持前台但不出窗口", tr)
+        }
+    }
+
+    /**
+     * 组件初始化：窗口控制器、手势、设置订阅。
+     *
+     * 全部依赖注入容器，因此容器未就绪时**整体跳过**并保持 componentsReady = false；
+     * 之后 onStartCommand 里的所有窗口操作都会因此被安全跳过，不会 NPE。
+     */
+    private fun initInternal() {
+        if (!ServiceLocator.isInitialized) {
+            Logx.w(TAG, "容器未就绪，跳过组件初始化（服务仍在前台运行）")
+            componentsReady = false
+            return
+        }
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         positionStore = OverlayPositionStore(ServiceLocator.c.appPreferences)
         composeHost = OverlayComposeHost(applicationContext)
@@ -107,31 +149,42 @@ class OverlayService : Service(), OverlayGestureCallbacks {
             // 拦截容器在「越阈值开始抢手势」时会调用 beginGesture 同步基准点
             touchInterceptor.gesture = detector
         }
-        createChannels()
-        startForegroundCompat()
         observeSettings()
         observeMessages()
+        componentsReady = true
+        Logx.i(TAG, "组件初始化完成")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> {
-                Logx.i(TAG, "收到停止指令")
-                // 先移除窗口再停止服务：保证「停止」与「不可见」同时发生。
-                detachOverlay()
-                stopSelf()
-                return START_NOT_STICKY
-            }
-            else -> Logx.i(TAG, "onStartCommand")
+        // 组件未就绪（容器尚未初始化）：只保证服务活着，不做任何窗口/数据操作。
+        // 这样即使系统在应用未启动时把服务拉起来，也不会 NPE。
+        if (!componentsReady) {
+            Logx.w(TAG, "组件未就绪，忽略本次 onStartCommand")
+            if (intent?.action == ACTION_STOP) stopSelf()
+            return START_STICKY
         }
-        updateNotification(unreadCount)
+
+        if (intent?.action == ACTION_STOP) {
+            Logx.i(TAG, "收到停止指令")
+            // 先移除窗口再停止服务：保证「停止」与「不可见」同时发生。
+            detachOverlay()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        Logx.i(TAG, "onStartCommand")
+
+        runCatching { updateNotification(unreadCount) }
+            .onFailure { Logx.swallow(TAG, "updateNotification", it) }
+
         // 服务启动时做一次消息清理（需求要求触发时机包含「前台服务启动」）
         serviceScope.launch {
             runCatching { ServiceLocator.c.messageStore.sweep() }
                 .onFailure { Logx.swallow(TAG, "sweep-on-start", it) }
         }
+
         // 总开关为开时才挂窗口；否则仅保持服务（等待总开关打开）
-        syncOverlay(masterSwitchOn)
+        runCatching { syncOverlay(masterSwitchOn) }
+            .onFailure { Logx.swallow(TAG, "syncOverlay-onStart", it) }
         return START_STICKY
     }
 
@@ -139,6 +192,7 @@ class OverlayService : Service(), OverlayGestureCallbacks {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        if (!componentsReady) return
         // 屏幕旋转后把窗口夹回屏幕内，否则会「跑到屏幕外 = 用户以为浮窗消失」
         runCatching { windowController.onConfigurationChanged() }
             .onFailure { Logx.swallow(TAG, "onConfigurationChanged", it) }
@@ -146,8 +200,7 @@ class OverlayService : Service(), OverlayGestureCallbacks {
 
     override fun onDestroy() {
         Logx.i(TAG, "onDestroy")
-        gesture?.release()
-        detachOverlay()
+        runCatching { gesture?.release() }
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -155,6 +208,7 @@ class OverlayService : Service(), OverlayGestureCallbacks {
     // ── 悬浮窗挂载 / 卸载 ────────────────────────────────────────
 
     private fun syncOverlay(shouldShow: Boolean) {
+        if (!componentsReady) return
         if (!shouldShow) {
             detachOverlay()
             return
@@ -201,6 +255,7 @@ class OverlayService : Service(), OverlayGestureCallbacks {
         }
     }
     private fun detachOverlay() {
+        if (!componentsReady) return
         runCatching { windowController.release() }
             .onFailure { Logx.swallow(TAG, "detachOverlay", it) }
     }
@@ -212,7 +267,7 @@ class OverlayService : Service(), OverlayGestureCallbacks {
     // ── 手势回调 ─────────────────────────────────────────────────
 
     override fun onSingleTap() {
-        if (!windowController.isAttached) return
+        if (!componentsReady || !windowController.isAttached) return
         val next = uiState.windowState.toggleExpanded()
         uiState = uiState.withState(next)
         windowController.applyState(next)
@@ -223,7 +278,7 @@ class OverlayService : Service(), OverlayGestureCallbacks {
     }
 
     override fun onDoubleTap() {
-        if (!windowController.isAttached) return
+        if (!componentsReady || !windowController.isAttached) return
         val next = uiState.windowState.toggleMini()
         uiState = uiState.withState(next)
         windowController.applyState(next)
@@ -235,15 +290,18 @@ class OverlayService : Service(), OverlayGestureCallbacks {
     }
 
     override fun onDragStart() {
+        if (!componentsReady) return
         uiState = uiState.withDragging(true)
         windowController.setDraggingAlpha(true)
     }
 
     override fun onDrag(dx: Int, dy: Int) {
+        if (!componentsReady) return
         windowController.moveBy(dx, dy)
     }
 
     override fun onDragEnd() {
+        if (!componentsReady) return
         uiState = uiState.withDragging(false)
         windowController.setDraggingAlpha(false)
         windowController.onDragFinished()
@@ -304,7 +362,7 @@ class OverlayService : Service(), OverlayGestureCallbacks {
 
     /** 折叠回胶囊态（底栏「折叠」按钮）。 */
     private fun collapseToCapsule() {
-        if (!windowController.isAttached) return
+        if (!componentsReady || !windowController.isAttached) return
         uiState = uiState.withState(OverlayWindowState.CAPSULE)
         windowController.applyState(OverlayWindowState.CAPSULE)
     }

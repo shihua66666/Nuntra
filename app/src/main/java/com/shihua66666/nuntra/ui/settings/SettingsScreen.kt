@@ -31,6 +31,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Scaffold
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.layout.width
+import com.shihua66666.nuntra.perm.PermissionNavigator
 import androidx.compose.ui.Modifier
 import com.shihua66666.nuntra.model.ReadinessSnapshot
 import com.shihua66666.nuntra.ui.components.NtButton
@@ -74,6 +77,10 @@ fun SettingsScreen(
     onResetSmsKeywords: () -> Unit = {},
     resolvedSmsPackages: Set<String> = emptySet(),
     smsNeedsManualSelection: Boolean = false,
+    /** 每次回前台自增：驱动权限状态重新读取（用户去设置里授权后切回来要立刻生效）。 */
+    resumeTick: Int = 0,
+    /** 手动重新检测权限（设置页的「重新检测」按钮）。 */
+    onRefreshReadiness: () -> Unit = {},
 ) {
     val c = LocalAppColors.current
     Scaffold(containerColor = c.background) { inner ->
@@ -139,18 +146,11 @@ fun SettingsScreen(
                 note = "默认保留最近 24 小时，条数上限默认 200，可调。",
             )
 
-            NtPanel(modifier = Modifier.fillMaxWidth()) {
-                SectionHeader(title = "权限引导")
-                Spacer(Modifier.height(8.dp))
-                NtCaption(text = "通知使用权：" + grantedText(readiness.notificationAccessGranted))
-                NtCaption(text = "悬浮窗权限：" + grantedText(readiness.overlayGranted))
-                NtCaption(text = "通知权限：" + grantedText(readiness.notificationsGranted))
-                NtCaption(text = "电池优化白名单：" + grantedText(readiness.batteryOptimizationIgnored))
-                Spacer(Modifier.height(8.dp))
-                NtDivider()
-                Spacer(Modifier.height(8.dp))
-                NtCaption(text = "各权限的跳转按钮将在权限引导模块（第 6/7 步）接入。")
-            }
+            PermissionSection(
+                readiness = readiness,
+                resumeTick = resumeTick,
+                onRefreshReadiness = onRefreshReadiness,
+            )
 
             Spacer(Modifier.height(24.dp))
         }
@@ -168,6 +168,147 @@ private fun PlaceholderSection(title: String, note: String) {
         SectionHeader(title = title)
         Spacer(Modifier.height(6.dp))
         NtCaption(text = note)
+    }
+}
+
+/**
+ * 权限引导（可操作）。
+ *
+ * 设计要点：
+ *  · **每一项都有可点的跳转按钮**，而不是只显示「未授权」让用户自己找；
+ *  · 状态在**每次回前台（resumeTick 变化）**重新读取，用户在系统设置里授权后
+ *    切回来立刻显示「已授权」，不需要重启应用；
+ *  · 全部跳转都经过 PermissionNavigator —— 那里有「主入口失败 → 应用详情页 →
+ *    系统设置首页」三级兜底，且任何异常都不外抛，不会因为点一下跳转而闪退。
+ */
+@Composable
+private fun PermissionSection(
+    readiness: ReadinessSnapshot,
+    resumeTick: Int,
+    onRefreshReadiness: () -> Unit,
+) {
+    val context = LocalContext.current
+    val c = LocalAppColors.current
+
+    // resumeTick 变化时重算一次「快照」，用于高亮「刚刚变成已授权」的项。
+    // 真正读取权限的是 MainActivity 传入的 readiness；这里只做呈现。
+    val current = remember(resumeTick, readiness) { readiness }
+
+    NtPanel(modifier = Modifier.fillMaxWidth()) {
+        SectionHeader(title = "权限引导")
+        Spacer(Modifier.height(4.dp))
+        NtCaption(text = "带「必开」的两项缺失时应用无法工作；其余为建议项。")
+        Spacer(Modifier.height(10.dp))
+
+        PermissionRowItem(
+            title = "通知使用权",
+            required = true,
+            granted = current.notificationAccessGranted,
+            description = "读取微信 / QQ / 短信的通知内容。系统级授权，没有运行时弹窗，必须手动开启。",
+            onOpen = { PermissionNavigator.openNotificationListenerSettings(context) },
+        )
+        PermissionRowItem(
+            title = "悬浮窗权限",
+            required = true,
+            granted = current.overlayGranted,
+            description = "显示可拖动的悬浮终端。缺少它时服务能运行但窗口画不出来。",
+            onOpen = { PermissionNavigator.openOverlaySettings(context) },
+        )
+        PermissionRowItem(
+            title = "通知权限",
+            required = false,
+            granted = current.notificationsGranted,
+            description = "决定前台服务那条常驻通知能否显示（Android 13+）。",
+            onOpen = { PermissionNavigator.openNotificationSettings(context) },
+        )
+        PermissionRowItem(
+            title = "电池优化白名单",
+            required = false,
+            granted = current.batteryOptimizationIgnored,
+            description = "降低被系统在后台清理的概率。一加 / ColorOS 上尤其重要。",
+            onOpen = { PermissionNavigator.requestIgnoreBatteryOptimizations(context) },
+        )
+
+        Spacer(Modifier.height(10.dp))
+        NtDivider()
+        Spacer(Modifier.height(10.dp))
+
+        // ── 一加 / ColorOS 专属：厂商页面无法保证跳转成功，因此给文字路径 ──
+        SectionHeader(title = "一加 / ColorOS 保活")
+        Spacer(Modifier.height(6.dp))
+        NtCaption(
+            text = "ColorOS 的「自启动」「后台活动」没有公开 API，跳转可能失败。" +
+                "若下面的按钮打不开，请手动按路径设置：" +
+                "设置 → 应用 → 应用管理 → 找到 Nuntra → 允许自启动 / 允许后台活动。",
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NtButton(
+                text = "尝试打开自启动设置",
+                accent = false,
+                onClick = { PermissionNavigator.openColorOsAutoStart(context) },
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        NtCaption(
+            text = "提示：本应用不申请也未使用「后台弹出界面」这类权限；" +
+                "悬浮窗是否可显示由系统按 SYSTEM_ALERT_WINDOW（即上面的悬浮窗权限）判定。",
+            color = c.textSecondary,
+        )
+
+        Spacer(Modifier.height(10.dp))
+        NtDivider()
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            NtCaption(
+                text = if (current.allCriticalGranted) "核心权限已就绪" else "缺少核心权限，应用无法工作",
+                color = if (current.allCriticalGranted) c.sourceWeChat else c.warning,
+            )
+            Spacer(Modifier.weight(1f))
+            NtButton(text = "重新检测", onClick = onRefreshReadiness)
+        }
+    }
+}
+
+/** 单条权限：状态点 + 名称 + 必开标记 + 说明 + 跳转按钮。 */
+@Composable
+private fun PermissionRowItem(
+    title: String,
+    required: Boolean,
+    granted: Boolean,
+    description: String,
+    onOpen: () -> Unit,
+) {
+    val c = LocalAppColors.current
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(if (granted) c.sourceWeChat else c.muted),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(text = title, color = c.textPrimary, fontSize = 14.sp)
+            if (required) {
+                Spacer(Modifier.width(6.dp))
+                Text(text = "必开", color = c.warning, fontSize = 11.sp)
+            }
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = if (granted) "已授权" else "未授权",
+                color = if (granted) c.sourceWeChat else c.warning,
+                fontSize = 12.sp,
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        NtCaption(text = description)
+        Spacer(Modifier.height(6.dp))
+        NtButton(
+            text = if (granted) "打开系统设置" else "去授权",
+            onClick = onOpen,
+            accent = !granted,
+        )
     }
 }
 
@@ -453,4 +594,3 @@ private fun SwatchDot(color: androidx.compose.ui.graphics.Color) {
 }
 
 
-private fun grantedText(granted: Boolean): String = if (granted) "已授权" else "未授权"

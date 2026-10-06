@@ -284,12 +284,31 @@ class OverlayWindowController(
 
     // ── 内部 ─────────────────────────────────────────────────────
 
-    private fun resolveSize(state: OverlayWindowState): OverlaySizePx = OverlayWindowState.sizeFor(
-        state = state,
-        configuration = context.resources.configuration,
-        density = context.resources.displayMetrics.density,
-        miniOverride = miniSize,
-    )
+    /**
+     * 计算窗口尺寸。
+     *
+     * 必须做非零兜底：WindowManager.addView 对 0 宽/0 高会抛异常，
+     * 而屏幕极小或 configuration 尚未就绪时，dp 换算确实可能算出 0。
+     */
+    private fun resolveSize(state: OverlayWindowState): OverlaySizePx {
+        val raw = runCatching {
+            OverlayWindowState.sizeFor(
+                state = state,
+                configuration = context.resources.configuration,
+                density = context.resources.displayMetrics.density,
+                miniOverride = miniSize,
+            )
+        }.getOrElse { tr ->
+            Logx.swallow(TAG, "resolveSize", tr)
+            OverlaySizePx(MIN_DIMEN_PX, MIN_DIMEN_PX)
+        }
+        // 非零兜底：WindowManager.addView 对 0 宽/0 高会抛异常，
+        // 而屏幕极小或 configuration 尚未就绪时，dp 换算确实可能算出 0。
+        return OverlaySizePx(
+            width = raw.width.coerceAtLeast(MIN_DIMEN_PX),
+            height = raw.height.coerceAtLeast(MIN_DIMEN_PX),
+        )
+    }
 
     private fun buildParams(
         state: OverlayWindowState,
@@ -379,6 +398,9 @@ class OverlayWindowController(
 
         /** 拖动时窗口透明度：给用户「正在被拖动」的反馈，但不要过于透明。 */
         private const val DRAGGING_ALPHA = 0.82f
+
+        /** 窗口最小尺寸（px）：防止 0 尺寸导致 addView 抛异常。 */
+        private const val MIN_DIMEN_PX = 48
     }
 }
 

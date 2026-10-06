@@ -50,7 +50,13 @@ fun MainScreen(
     messageCount: Int,
     unreadCount: Int,
     latestMessageAt: Long?,
-    serviceRunning: Boolean,
+    /**
+     * 悬浮窗是否**真的**已挂载（来自 OverlayService.isWindowAttached）。
+     *
+     * 不要用「总开关是否打开」代替它：开关只代表用户意图，
+     * 窗口可能因权限、token、ComposeView 创建失败等原因没画出来。
+     */
+    windowAttached: Boolean,
     onOpenSettings: () -> Unit,
     onStartService: () -> Unit,
     onStopService: () -> Unit,
@@ -72,12 +78,12 @@ fun MainScreen(
             AppHeader(colors)
             MasterSwitchPanel(
                 enabled = masterSwitchEnabled,
-                serviceRunning = serviceRunning,
+                windowAttached = windowAttached,
                 onToggle = onToggleMasterSwitch,
             )
             ReadinessPanel(readiness = readiness, onOpenSettings = onOpenSettings)
             ServicePanel(
-                serviceRunning = serviceRunning,
+                windowAttached = windowAttached,
                 messageCount = messageCount,
                 unreadCount = unreadCount,
                 latestMessageAt = latestMessageAt,
@@ -121,7 +127,7 @@ private fun AppHeader(colors: AppColors) {
 @Composable
 private fun MasterSwitchPanel(
     enabled: Boolean,
-    serviceRunning: Boolean,
+    windowAttached: Boolean,
     onToggle: (Boolean) -> Unit,
 ) {
     val c = LocalAppColors.current
@@ -151,24 +157,25 @@ private fun MasterSwitchPanel(
         //   若这里显示 false 而你刚点过 → 值没传到 UI（状态回流/重组问题）；
         //   若显示 true 但开关仍是灰的 → Switch 渲染问题。
         NtMono(
-            text = "[诊断] enabled=" + enabled + "  serviceRunning=" + serviceRunning,
+            text = "[诊断] enabled=" + enabled + "  windowAttached=" + windowAttached,
             color = c.warning,
         )
         Spacer(Modifier.height(8.dp))
         NtDivider()
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            NtStatusDot(ok = enabled && serviceRunning)
+            NtStatusDot(ok = enabled && windowAttached)
             Spacer(Modifier.width(8.dp))
             NtCaption(
+                // ★ 文案基于真实挂载状态：不再出现「服务在跑、屏幕空白」却写「应可见」
                 text = when {
                     !enabled -> "省电状态：不会监听任何通知"
-                    serviceRunning -> "前台服务运行中，悬浮窗应可见"
-                    else -> "已开启但服务未运行：点下方「启动服务」"
+                    windowAttached -> "悬浮窗已挂载，应在屏幕上可见"
+                    else -> "已开启但悬浮窗未挂载：检查悬浮窗权限，并看上方失败提示"
                 },
                 color = when {
                     !enabled -> c.textSecondary
-                    serviceRunning -> c.sourceWeChat
+                    windowAttached -> c.sourceWeChat
                     else -> c.warning
                 },
             )
@@ -225,7 +232,7 @@ private fun PermissionRow(label: String, granted: Boolean, critical: Boolean) {
 
 @Composable
 private fun ServicePanel(
-    serviceRunning: Boolean,
+    windowAttached: Boolean,
     messageCount: Int,
     unreadCount: Int,
     latestMessageAt: Long?,
@@ -239,9 +246,9 @@ private fun ServicePanel(
         SectionHeader(title = "悬浮终端")
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            NtStatusDot(ok = serviceRunning)
+            NtStatusDot(ok = windowAttached)
             Spacer(Modifier.width(10.dp))
-            NtBody(text = if (serviceRunning) "服务运行中" else "服务未运行")
+            NtBody(text = if (windowAttached) "悬浮窗已挂载" else "悬浮窗未挂载")
         }
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -270,7 +277,7 @@ private fun ServicePanel(
         NtDivider()
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (serviceRunning) {
+            if (windowAttached) {
                 NtButton(text = "停止服务", onClick = onStopService, accent = false)
             } else {
                 NtButton(

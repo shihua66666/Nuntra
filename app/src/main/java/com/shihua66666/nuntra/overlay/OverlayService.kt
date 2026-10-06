@@ -200,6 +200,7 @@ class OverlayService : Service(), OverlayGestureCallbacks {
 
     override fun onDestroy() {
         Logx.i(TAG, "onDestroy")
+        setWindowAttached(false)
         runCatching { gesture?.release() }
         serviceScope.cancel()
         super.onDestroy()
@@ -208,14 +209,24 @@ class OverlayService : Service(), OverlayGestureCallbacks {
     // ── 悬浮窗挂载 / 卸载 ────────────────────────────────────────
 
     private fun syncOverlay(shouldShow: Boolean) {
-        if (!componentsReady) return
+        // ★ 四道闸门全部改成「有反馈」：任何一处拦住都要让用户知道是哪一个，
+        //   否则表现就是「服务在运行但屏幕上什么都没有」，完全无从排查。
+        if (!componentsReady) {
+            Logx.w(TAG, "组件未就绪，跳过挂载")
+            NtToast.show(this, "悬浮窗未挂载：组件未就绪")
+            return
+        }
         if (!shouldShow) {
             detachOverlay()
             return
         }
-        if (windowController.isAttached) return
+        if (windowController.isAttached) {
+            Logx.d(TAG, "窗口已挂载，无需重复")
+            return
+        }
         if (!canDrawOverlays()) {
-            Logx.w(TAG, "缺少悬浮窗权限，暂不挂载（用户授权后重启服务即可）")
+            Logx.w(TAG, "缺少悬浮窗权限，暂不挂载")
+            NtToast.show(this, "悬浮窗未挂载：缺少悬浮窗权限")
             return
         }
         serviceScope.launch {
@@ -227,7 +238,11 @@ class OverlayService : Service(), OverlayGestureCallbacks {
                     OverlayServiceContent()
                 }
             }.getOrElse { tr ->
-                Logx.swallow(TAG, "createView", tr)
+                Logx.e(TAG, "创建悬浮窗内容失败", tr)
+                NtToast.show(
+                    this@OverlayService,
+                    "悬浮窗内容创建失败：" + tr.javaClass.simpleName,
+                )
                 null
             } ?: return@launch
 
@@ -247,14 +262,18 @@ class OverlayService : Service(), OverlayGestureCallbacks {
                 state = uiState.windowState,
                 viewFactory = { _, _ -> touchInterceptor },
             )
+            setWindowAttached(attached)
             if (!attached) {
+                // 具体异常已由 OverlayWindowController 弹出，这里只补一条上下文
                 Logx.w(TAG, "悬浮窗挂载失败（权限被撤销或 token 失效）")
+                NtToast.show(this@OverlayService, "悬浮窗挂载失败，详见上一条提示")
             } else {
                 gesture?.let { touchInterceptor.resetGesture() }
             }
         }
     }
     private fun detachOverlay() {
+        setWindowAttached(false)
         if (!componentsReady) return
         runCatching { windowController.release() }
             .onFailure { Logx.swallow(TAG, "detachOverlay", it) }
@@ -516,6 +535,22 @@ class OverlayService : Service(), OverlayGestureCallbacks {
 
     companion object {
         private const val TAG = "OverlayService"
+
+        /**
+         * 悬浮窗是否真的已挂载到 WindowManager。
+         *
+         * 为什么需要这个静态标志：UI 层无法直接询问服务实例，
+         * 而「服务在运行」并不等于「窗口已挂载」—— 之前界面文案就是靠猜，会骗用户。
+         * 这里由服务在挂载/卸载时维护，UI 读它得到真实状态。
+         */
+        @Volatile
+        var isWindowAttached: Boolean = false
+            private set
+
+        /** 供服务内部更新挂载状态。 */
+        fun setWindowAttached(attached: Boolean) {
+            isWindowAttached = attached
+        }
         private const val CHANNEL_OVERLAY = "nuntra_overlay"
         private const val CHANNEL_PRIORITY = "nuntra_priority"
         private const val NOTIFICATION_ID = 1001

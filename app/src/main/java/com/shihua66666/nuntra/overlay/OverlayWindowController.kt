@@ -6,6 +6,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import com.shihua66666.nuntra.core.Logx
+import com.shihua66666.nuntra.core.NtToast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -103,10 +104,16 @@ class OverlayWindowController(
             params = layoutParams
             host.onAfterAdd()
             Logx.i(TAG, "窗口已挂载：" + state.name + " " + size.width + "x" + size.height)
+            NtToast.show(context, "悬浮窗已挂载（" + state.name + " " + size.width + "x" + size.height + "）")
             true
         }.getOrElse { tr ->
-            // BadTokenException / 权限被撤销等都会走到这里；不允许崩。
-            Logx.swallow(TAG, "addView", tr)
+            // BadTokenException / 权限被撤销 / 一加的后台弹窗限制都会走到这里。
+            // ★ 绝不静默：把异常类名与消息弹给用户，否则「服务在跑但没窗口」无从排查。
+            Logx.e(TAG, "addView 失败", tr)
+            NtToast.show(
+                context,
+                "悬浮窗挂载失败：" + tr.javaClass.simpleName + " / " + (tr.message ?: "无消息"),
+            )
             host.onAfterRemove()
             false
         }

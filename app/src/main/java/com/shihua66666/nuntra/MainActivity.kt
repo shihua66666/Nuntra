@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -85,6 +86,9 @@ class MainActivity : ComponentActivity() {
         Logx.d("MainActivity", "onResume：刷新权限状态（tick=" + resumeTick + "）")
     }
 }
+
+/** 悬浮窗挂载状态的轮询间隔（ms）：挂载/卸载都是低频事件，1.5 秒足够且不耗电。 */
+private const val WINDOW_STATE_POLL_MS = 1500L
 
 @Composable
 private fun NuntraApp(
@@ -156,8 +160,21 @@ private fun AppContent(
 
     // readiness 由 resumeTick 驱动：onResume 时重新计算。
     // snapshot 内部已经全部 runCatching，这里再包一层是为了「任何意外都不致崩」。
+    // ★ 悬浮窗是否**真的**挂上了：读服务维护的静态标志，低频轮询刷新。
+    //   为什么需要轮询：挂载发生在服务协程里（建 ComposeView、读位置、addView），
+    //   只在 onResume 读一次会漏掉「挂载完成后」的状态变化，界面就会一直显示旧判断。
+    var windowAttached by remember {
+        mutableStateOf(com.shihua66666.nuntra.overlay.OverlayService.isWindowAttached)
+    }
+    LaunchedEffect(masterSwitchEnabled) {
+        while (true) {
+            windowAttached = com.shihua66666.nuntra.overlay.OverlayService.isWindowAttached
+            kotlinx.coroutines.delay(WINDOW_STATE_POLL_MS)
+        }
+    }
+
     val readiness = remember(resumeTick, masterSwitchEnabled) {
-        runCatching { PermissionChecker.snapshot(ServiceLocator.context, masterSwitchEnabled) }
+        runCatching { PermissionChecker.snapshot(ServiceLocator.context) }
             .getOrElse { tr ->
                 Logx.swallow("MainActivity", "readiness", tr)
                 com.shihua66666.nuntra.model.ReadinessSnapshot()
@@ -250,7 +267,7 @@ private fun AppContent(
                 messageCount = messages.size,
                 unreadCount = unread,
                 latestMessageAt = messages.firstOrNull()?.sortTime,
-                serviceRunning = readiness.serviceRunning,
+                windowAttached = windowAttached,
                 onOpenSettings = { screen = Screen.Settings },
                 onStartService = {
                     // 手动启动也走编排逻辑：缺权限时提示并引导，而不是静默失败

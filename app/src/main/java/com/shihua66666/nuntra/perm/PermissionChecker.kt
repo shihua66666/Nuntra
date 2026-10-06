@@ -92,7 +92,17 @@ object PermissionChecker {
      *
      * @param serviceRunning 悬浮窗前台服务是否在运行（由调用方传入，本类不查询服务状态）
      */
-    fun snapshot(context: Context, serviceRunning: Boolean = false): ReadinessSnapshot = ReadinessSnapshot(
+    fun snapshot(
+        context: Context,
+        /**
+         * 悬浮窗是否真的已挂载。
+         *
+         * ★ 默认值不再是写死的 false：改为读取服务的真实状态。
+         *   之前 MainActivity 传的是 masterSwitchEnabled（开关是否打开），
+         *   那只代表「用户想开」，不代表「窗口真的画出来了」—— 会误导用户。
+         */
+        serviceRunning: Boolean = com.shihua66666.nuntra.overlay.OverlayService.isWindowAttached,
+    ): ReadinessSnapshot = ReadinessSnapshot(
         notificationAccessGranted = hasNotificationAccess(context),
         overlayGranted = canDrawOverlays(context),
         notificationsGranted = hasPostNotifications(context),

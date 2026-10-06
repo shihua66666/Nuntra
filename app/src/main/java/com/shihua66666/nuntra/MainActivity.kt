@@ -114,6 +114,8 @@ private fun NuntraApp(
                     container = container,
                     resumeTick = resumeTick,
                     onRequestResumeRefresh = onRequestResumeRefresh,
+                    // ★ 主题自上而下传递：NuntraApp 已收集过一次，避免重复 collectAsState
+                    colors = colors,
                 )
             }
         }

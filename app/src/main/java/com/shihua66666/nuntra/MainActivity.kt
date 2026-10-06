@@ -62,8 +62,18 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        runCatching { setContent { NuntraApp(resumeTick) } }
-            .onFailure { tr -> Logx.swallow("MainActivity", "setContent", tr) }
+        runCatching {
+            setContent {
+                // onRequestResumeRefresh 由 Activity 提供：
+                // Composable 只调用回调，真正改动状态的是状态的持有者。
+                // （此前写成在 Composable 内部 resumeTick++ 是非法的 —— 函数参数是 val，
+                //   会被编译器拒绝：'val' cannot be reassigned。）
+                NuntraApp(
+                    resumeTick = resumeTick,
+                    onRequestResumeRefresh = { resumeTick++ },
+                )
+            }
+        }.onFailure { tr -> Logx.swallow("MainActivity", "setContent", tr) }
     }
 
     override fun onResume() {
@@ -76,7 +86,11 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun NuntraApp(resumeTick: Int) {
+private fun NuntraApp(
+    resumeTick: Int,
+    /** 请求重新检测权限：由 Activity 传入（它持有可变状态），Composable 只调用不修改。 */
+    onRequestResumeRefresh: () -> Unit,
+) {
     val container = ServiceLocator.appContainerOrNull
 
     // 主题单独处理：容器不可用时用默认配色兜底，保证「错误页」也能正常渲染
@@ -98,7 +112,7 @@ private fun NuntraApp(resumeTick: Int) {
                 AppContent(
                     container = container,
                     resumeTick = resumeTick,
-                    onRequestResumeRefresh = { resumeTick++ },
+                    onRequestResumeRefresh = onRequestResumeRefresh,
                 )
             }
         }

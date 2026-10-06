@@ -73,7 +73,11 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
-        freeCompilerArgs.add("-Xjvm-default=all")
+        // 刻意不设置 -Xjvm-default：
+        //  · 它在 Kotlin 2.2.0 起被标记弃用（CI 里会报 DeprecatedJvmDefaultFlag 之类警告）；
+        //  · 它只影响「Kotlin 接口默认方法」如何生成 Java 兼容的 DefaultImpls；
+        //  · 本工程没有任何 Java 源码，接口也都不含默认实现，因此该参数零作用。
+        //    移除它可消除警告，且不改变任何编译产物的行为。
     }
 }
 

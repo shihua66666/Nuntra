@@ -136,11 +136,16 @@ private fun MasterSwitchPanel(
     NtPanel(modifier = Modifier.fillMaxWidth()) {
         SectionHeader(title = "总监控开关")
         Spacer(Modifier.height(6.dp))
+        // ★ 调试 Toast：用于区分「触摸没进来」与「逻辑被吞」。
+        //   若点击后连这个 Toast 都不出现，说明触摸事件没到达控件（禁用 / 被遮挡）；
+        //   若出现了但开关不亮，说明点击进来了，问题在后续启动逻辑。
+        //   验证通过后把 debugToast 改为 false 即可关闭。
         NtSwitchRow(
             title = title,
             subtitle = subtitle,
             checked = enabled,
             onCheckedChange = onToggle,
+            debugToast = true,
         )
         Spacer(Modifier.height(8.dp))
         NtDivider()

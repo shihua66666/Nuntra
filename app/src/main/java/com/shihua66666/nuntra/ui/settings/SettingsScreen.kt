@@ -324,6 +324,8 @@ private fun MasterSwitchSection(enabled: Boolean, onToggle: (Boolean) -> Unit) {
             subtitle = "总闸。关闭后监听服务收到任何通知都立即丢弃，前台服务与悬浮窗同时停止。",
             checked = enabled,
             onCheckedChange = onToggle,
+            // 与首页同一个开关：两处都出 Toast 才能确认是哪一层的问题
+            debugToast = true,
         )
         if (!enabled) {
             Spacer(Modifier.height(6.dp))

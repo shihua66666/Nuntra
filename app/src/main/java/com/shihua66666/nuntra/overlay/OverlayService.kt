@@ -24,6 +24,7 @@ import androidx.core.app.ServiceCompat
 import com.shihua66666.nuntra.MainActivity
 import com.shihua66666.nuntra.R
 import com.shihua66666.nuntra.core.Logx
+import com.shihua66666.nuntra.core.NtToast
 import com.shihua66666.nuntra.core.ServiceLocator
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize

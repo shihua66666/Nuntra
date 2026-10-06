@@ -263,6 +263,35 @@ e: SettingsScreen.kt:308 @Composable invocations can only happen from the contex
 
 ---
 
+### 7.7 新增跨包引用必须同步补 import（反复踩过的坑）
+
+本项目已经**四次**因为「文件里用了某个类型但没写 import」而编译失败，
+其中一次是 `NtToast.show(...)` —— 注意它的形态是**点号调用**，
+不是构造调用，肉眼扫一眼很容易忽略：
+
+```kotlin
+NtToast.show(this, "…")          // 需要 import com.shihua66666.nuntra.core.NtToast
+TagPalette.resolve(hex)          // 需要 import …ui.theme.TagPalette
+```
+
+**规则：任何一次「在 A 文件里使用 B 包的类型」的改动，提交前必须确认 import 已补。**
+尤其注意这几种容易漏的形态：
+
+| 形态 | 例子 |
+|---|---|
+| 点号调用 | `NtToast.show(...)`、`PermissionNavigator.openXxx(ctx)` |
+| 顶层函数 | `nuntraTypography(mono)`、`highlightKeywords(...)` |
+| 参数/返回类型 | `colors: AppColors` |
+| 泛型实参 | `StateFlow<List<TagView>>` |
+| 扩展属性 | `context.nuntraDataStore` |
+
+**自查方式**：把新增的跨包类型逐个 grep 目标文件，确认 import 行存在。
+
+> 补充：**属性委托 `by`** 还需要 `getValue`/`setValue`，见 §7.6 ——
+> 这两个 operator 在源码里不出现，既容易漏、也容易被误删。
+
+---
+
 ## 8. 已知未验证项（诚实标注）
 
 本工程在**没有 Android 工具链的机器**上编写，因此以下内容尚未经过编译或真机验证：

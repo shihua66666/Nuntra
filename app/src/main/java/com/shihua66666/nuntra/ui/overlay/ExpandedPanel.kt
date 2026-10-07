@@ -18,6 +18,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -107,13 +108,18 @@ fun ExpandedPanel(
                 onToggleTag = onToggleTag,
                 onSelectAll = onSelectAll,
                 modifier = Modifier.onGloballyPositioned { coords ->
-                    val r = coords.boundsInRoot()
+                    // 用 localToWindow + size 计算矩形，而不用 boundsInRoot()：
+                    //   · size / localToWindow 都是 LayoutCoordinates 的**成员**，跨版本稳定；
+                    //   · boundsInRoot / boundsInWindow 是 androidx.compose.ui.layout 里的
+                    //     **顶层扩展函数**，需要额外 import —— 上一版正是漏了它导致编译失败。
+                    // 坐标口径与拦截器里的 ev.x / ev.y 一致：都以窗口左上角为原点。
+                    val topLeft = coords.localToWindow(Offset.Zero)
                     onFilterBarBounds(
                         android.graphics.Rect(
-                            r.left.toInt(),
-                            r.top.toInt(),
-                            r.right.toInt(),
-                            r.bottom.toInt(),
+                            topLeft.x.toInt(),
+                            topLeft.y.toInt(),
+                            (topLeft.x + coords.size.width).toInt(),
+                            (topLeft.y + coords.size.height).toInt(),
                         ),
                     )
                 },

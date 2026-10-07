@@ -353,6 +353,7 @@ class OverlayService : Service(), OverlayGestureCallbacks {
     // ── 手势回调 ─────────────────────────────────────────────────
 
     override fun onSingleTap() {
+        if (DEBUG_TOUCH) NtToast.show(this, "[浮窗] 单击（展开/收起）")
         if (!componentsReady || !windowController.isAttached) return
         val next = uiState.windowState.toggleExpanded()
         uiState = uiState.withState(next)
@@ -364,6 +365,7 @@ class OverlayService : Service(), OverlayGestureCallbacks {
     }
 
     override fun onDoubleTap() {
+        if (DEBUG_TOUCH) NtToast.show(this, "[浮窗] 双击（切换小窗）")
         if (!componentsReady || !windowController.isAttached) return
         val next = uiState.windowState.toggleMini()
         uiState = uiState.withState(next)
@@ -371,11 +373,13 @@ class OverlayService : Service(), OverlayGestureCallbacks {
     }
 
     override fun onLongPress() {
+        if (DEBUG_TOUCH) NtToast.show(this, "[浮窗] 长按（快捷菜单）")
         uiState = uiState.withQuickMenu(!uiState.quickMenuVisible)
         Logx.d(TAG, "长按快捷菜单：" + uiState.quickMenuVisible)
     }
 
     override fun onDragStart() {
+        if (DEBUG_TOUCH) NtToast.show(this, "[浮窗] 拖动开始")
         if (!componentsReady) return
         uiState = uiState.withDragging(true)
         windowController.setDraggingAlpha(true)
@@ -387,6 +391,7 @@ class OverlayService : Service(), OverlayGestureCallbacks {
     }
 
     override fun onDragEnd() {
+        if (DEBUG_TOUCH) NtToast.show(this, "[浮窗] 拖动结束")
         if (!componentsReady) return
         uiState = uiState.withDragging(false)
         windowController.setDraggingAlpha(false)
@@ -602,6 +607,11 @@ class OverlayService : Service(), OverlayGestureCallbacks {
             onOpenSettings = { openApp() },
             onClearMessages = { runCatching { container.messageStore.clear() } },
                 onCollapse = { collapseToCapsule() },
+            // ★ 点击 / 双击 / 长按：由 Compose 的 detectTapGestures 上报（见 ui/overlay/OverlayRoot.kt）
+            //   拖动则由 OverlayTouchInterceptor 在窗口层处理，两者分工明确、互不重复。
+            onSingleTap = { onSingleTap() },
+            onDoubleTap = { onDoubleTap() },
+            onLongPress = { onLongPress() },
             messageList = {
                 MessageList(
                     tags = tags,
@@ -619,6 +629,18 @@ class OverlayService : Service(), OverlayGestureCallbacks {
 
     companion object {
         private const val TAG = "OverlayService"
+
+        /**
+         * 调试开关：手势回调每次触发都弹 Toast，用来确认触摸事件到底走到了哪一环。
+         *
+         * 排查顺序（配合 OverlayTouchInterceptor 里的同名开关）：
+         *   1. 按下没有「[浮窗] 触摸到达」→ 触摸根本没进窗口（flags / 权限）；
+         *   2. 有「触摸到达」但没有「单击」→ Compose 手势没生效；
+         *   3. 有「单击」但界面没变化 → 业务逻辑（状态切换）出错。
+         *
+         * 触摸验证完成后改为 false，避免每次操作都刷 Toast。
+         */
+        private const val DEBUG_TOUCH = true
 
         /** 挂载前的固定延迟（ms）：让主进程把单例装配完再挂窗口。 */
         private const val MOUNT_DELAY_MS = 500L

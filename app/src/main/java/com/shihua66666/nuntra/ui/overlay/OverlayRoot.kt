@@ -2,6 +2,7 @@ package com.shihua66666.nuntra.ui.overlay
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -10,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.shihua66666.nuntra.model.TagView
 import com.shihua66666.nuntra.overlay.OverlayWindowState
@@ -35,6 +37,12 @@ fun OverlayRoot(
     unreadCount: Int,
     dragging: Boolean,
     modifier: Modifier = Modifier,
+    /** 单击（仅胶囊态响应）。 */
+    onSingleTap: () -> Unit = {},
+    /** 双击：与单击互斥，因此用 detectTapGestures 统一处理。 */
+    onDoubleTap: () -> Unit = {},
+    /** 长按：呼出快捷菜单。 */
+    onLongPress: () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     val c = LocalAppColors.current
@@ -43,12 +51,41 @@ fun OverlayRoot(
         OverlayWindowState.PANEL -> OverlayDimens.panelShape()
         OverlayWindowState.MINI -> OverlayDimens.miniShape()
     }
+    // ★★ Compose 侧手势绑定 ★★
+    //
+    //   为什么用 detectTapGestures 而不是 clickable：
+    //     clickable 与双击判定天然冲突 —— clickable 会在第一次抬起后立即触发单击，
+    //     用户想双击时会出现「先展开、又切小窗」的抖动。
+    //     detectTapGestures 内部会等待双击超时，单击/双击/长按在同一套状态机里互斥。
+    //
+    //   手势挂在根容器上，与窗口层拖动分工：
+    //     拖动由 OverlayTouchInterceptor 在越阈值时抢走手势；
+    //     阈值内的点击留在这里处理，两者互不干扰。
+    //
+    //   面板态只保留双击与长按：单击留给列表项与筛选按钮，
+    //   否则点一下列表空白就把面板收起来，交互会很难用。
+    val tapGestures = Modifier.pointerInput(windowState) {
+        if (windowState == OverlayWindowState.CAPSULE) {
+            detectTapGestures(
+                onTap = { onSingleTap() },
+                onDoubleTap = { onDoubleTap() },
+                onLongPress = { onLongPress() },
+            )
+        } else {
+            detectTapGestures(
+                onDoubleTap = { onDoubleTap() },
+                onLongPress = { onLongPress() },
+            )
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .clip(shape)
             .background(c.panel.copy(alpha = PANEL_ALPHA))
-            .border(1.dp, c.border, shape),
+            .border(1.dp, c.border, shape)
+            .then(tapGestures),
         contentAlignment = Alignment.Center,
     ) {
         content()
@@ -86,12 +123,21 @@ fun OverlayContent(
      * 因此这里不再单独暴露 onMessageClick，避免出现两个语义重复的回调。
      */
     messageList: @Composable () -> Unit,
+    /** 单击（胶囊态展开）。 */
+    onSingleTap: () -> Unit = {},
+    /** 双击（切换小窗）。 */
+    onDoubleTap: () -> Unit = {},
+    /** 长按（快捷菜单）。 */
+    onLongPress: () -> Unit = {},
 ) {
     OverlayRoot(
         colors = colors,
         windowState = windowState,
         unreadCount = unreadCount,
         dragging = dragging,
+        onSingleTap = onSingleTap,
+        onDoubleTap = onDoubleTap,
+        onLongPress = onLongPress,
     ) {
         when (windowState) {
             OverlayWindowState.CAPSULE -> CollapsedCapsule(

@@ -5,6 +5,7 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.widget.FrameLayout
+import com.shihua66666.nuntra.core.NtToast
 
 /**
  * 悬浮窗的触摸拦截容器。
@@ -42,7 +43,13 @@ class OverlayTouchInterceptor @JvmOverloads constructor(
                 downX = ev.rawX
                 downY = ev.rawY
                 dragging = false
-                return false // 让 Compose 先拿到事件
+                // ★ 调试：这条 Toast 证明「触摸事件真的到达了浮窗」。
+                //   若手指按下却看不到它，说明窗口本身不可触摸（flags/权限问题）；
+                //   看到了它却点不动，说明是手势层的问题。验证完成后置 DEBUG_TOUCH=false 即可。
+                if (DEBUG_TOUCH) NtToast.show(context, "[浮窗] 触摸到达")
+                // ★ 返回 false：把 DOWN 交给 Compose，点击/双击/长按才能生效。
+                //   返回 true 会把子 View 的事件全部吃掉，浮窗内部就「点不动」了。
+                return false
             }
 
             MotionEvent.ACTION_MOVE -> {
@@ -52,24 +59,56 @@ class OverlayTouchInterceptor @JvmOverloads constructor(
                     if (dx > touchSlop || dy > touchSlop) {
                         dragging = true
                         gesture?.beginGesture(ev.rawX, ev.rawY)
-                        return true // 从这里开始抢过手势
+                        if (DEBUG_TOUCH) NtToast.show(context, "[浮窗] 开始拖动")
+                        return true // 越阈值才抢过手势用于拖动
                     }
                 }
-                return dragging
+                // ★★ 未越阈值一律返回 false ★★
+                //    原实现这里写的是 `return dragging`：虽然此刻 dragging 为 false，
+                //    语义上却把「已开始拖动」的状态也带进了返回值，容易误改；
+                //    显式 false 更明确 —— 阈值内绝不吃掉点击。
+                return false
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // 未抢过手势时把 UP 交还子 View（Compose 需要它来完成点击）
                 val was = dragging
                 dragging = false
                 return was
             }
         }
-        return dragging
+        return false
+    }
+
+    /**
+     * ★★ 拖动能否「跟手」的关键 ★★
+     *
+     * 一旦 [onInterceptTouchEvent] 返回 true 抢过手势，本 View 就成为触摸目标，
+     * 后续 MOVE/UP **不再经过 onInterceptTouchEvent**，而是走这里。
+     *
+     * 之前没有这个方法，导致拖动只在「越阈值那一帧」响应一次，之后窗口纹丝不动 ——
+     * 现象就是「浮窗拖不动」。
+     */
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        val detector = gesture
+        if (detector != null) return detector.onTouch(this, event)
+        return super.onTouchEvent(event)
     }
 
     /** 手指离开时复位，保证下一次手势从干净状态开始。 */
     fun resetGesture() {
         dragging = false
+    }
+    private companion object {
+        /**
+         * 调试开关：为 true 时每次「按下 / 开始拖动」都弹 Toast。
+         *
+         * 存在的意义是区分两类「没反应」：
+         *  · 按下无 Toast → 触摸根本没到浮窗（窗口 flags / 权限 / 窗口不可触摸）；
+         *  · 有 Toast 但不响应 → 触摸到了，问题在手势层。
+         * 触摸验证通过后改为 false 即可，避免刷屏。
+         */
+        const val DEBUG_TOUCH = true
     }
 
     // ── OverlayComposeHostAccessor ───────────────────────────────

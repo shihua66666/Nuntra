@@ -27,6 +27,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.shihua66666.nuntra.core.AlertPlayer
+import com.shihua66666.nuntra.core.BackupManager
+import com.shihua66666.nuntra.core.ConfigBackup
 import com.shihua66666.nuntra.core.Logx
 import com.shihua66666.nuntra.data.MessageStore
 import com.shihua66666.nuntra.data.TagOpError
@@ -396,6 +398,23 @@ private fun AppContent(
                 clearReadOnTap = clearReadOnTapPref,
                 onChangeClearReadOnTap = { v ->
                     scope.launch { container.appPreferences.setClearReadOnTap(v) }
+                },
+                // ★ 备份与恢复：导出全部配置 / 从备份文件恢复
+                onBuildBackup = {
+                    runCatching { BackupManager.encode(BackupManager.snapshot(container)) }.getOrNull()
+                },
+                onApplyBackup = { text ->
+                    runCatching {
+                        BackupManager.restore(
+                            container = container,
+                            backup = BackupManager.decode(text),
+                            context = ServiceLocator.context,
+                            scope = scope,
+                        )
+                    }.getOrElse { tr ->
+                        Logx.swallow("MainActivity", "applyBackup", tr)
+                        "导入失败：" + tr.javaClass.simpleName + " / " + (tr.message ?: "无消息")
+                    }
                 },
                 onOpenTagManager = { screen = Screen.TagManager },
                 onOpenContacts = { screen = Screen.Contacts },

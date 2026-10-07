@@ -10,6 +10,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.draw.clip
@@ -30,6 +31,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.ui.platform.LocalContext
@@ -49,6 +52,9 @@ import com.shihua66666.nuntra.ui.components.NtSwitchRow
 import com.shihua66666.nuntra.ui.components.SectionHeader
 import com.shihua66666.nuntra.ui.theme.AppColors
 import com.shihua66666.nuntra.ui.theme.LocalAppColors
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 /**
@@ -102,6 +108,10 @@ fun SettingsScreen(
     onOpenContacts: () -> Unit = {},
     /** 打开「提醒音与重复提醒」子页面。 */
     onOpenReminder: () -> Unit = {},
+    /** 生成配置备份 JSON；失败返回 null。 */
+    onBuildBackup: suspend () -> String? = { null },
+    /** 应用配置备份 JSON，返回人话结果摘要。 */
+    onApplyBackup: suspend (String) -> String = { "导入功能未接线" },
 ) {
     val c = LocalAppColors.current
     Scaffold(containerColor = c.background) { inner ->
@@ -179,6 +189,14 @@ fun SettingsScreen(
             ClickBehaviorSection(
                 clearReadOnTap = clearReadOnTap,
                 onChange = onChangeClearReadOnTap,
+            )
+
+            // ★ 备份与恢复放在最靠前的位置：
+            //   它是「覆盖安装必须先卸载」这一事故的紧急救生索，
+            //   用户遇到数据丢失时会第一时间来找它。
+            BackupSection(
+                onBuildBackup = onBuildBackup,
+                onApplyBackup = onApplyBackup,
             )
 
             CrashDiagnosticsSection()
@@ -349,6 +367,101 @@ private fun PlaceholderSection(title: String, note: String) {
         SectionHeader(title = title)
         Spacer(Modifier.height(6.dp))
         NtCaption(text = note)
+    }
+}
+
+/**
+ * 备份与恢复分区。
+ *
+ * 为什么需要：签名没固定时，覆盖安装会被系统拒绝，必须先卸载 ——
+ * 而卸载会清掉 DataStore，标签/关注人/主题全部丢失。
+ * 有了导出/导入，用户至少能「导出 → 卸载 → 装新版 → 导入」把配置救回来。
+ *
+ * 文件读写走 SAF（系统文件选择器），因此**不需要任何存储权限**，
+ * 也不违反本项目「零网络、最小权限」的原则。
+ */
+@Composable
+private fun BackupSection(
+    onBuildBackup: suspend () -> String?,
+    onApplyBackup: suspend (String) -> String,
+) {
+    val c = LocalAppColors.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    // 导出：系统弹「保存到…」，用户自己选位置
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val text = runCatching { onBuildBackup() }.getOrNull()
+            if (text.isNullOrBlank()) {
+                NtToast.show(context, "导出失败：无法生成配置")
+                return@launch
+            }
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        out.write(text.toByteArray(Charsets.UTF_8))
+                        out.flush()
+                    }
+                    true
+                }.getOrDefault(false)
+            }
+            NtToast.show(context, if (ok) "配置已导出到所选文件" else "导出失败：无法写入文件")
+        }
+    }
+
+    // 导入：系统弹「选择文件」
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val text = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                }.getOrNull()
+            }
+            if (text.isNullOrBlank()) {
+                NtToast.show(context, "导入失败：文件为空或无法读取")
+                return@launch
+            }
+            val summary = runCatching { onApplyBackup(text) }.getOrElse { tr ->
+                "导入失败：" + tr.javaClass.simpleName + " / " + (tr.message ?: "无消息")
+            }
+            NtToast.show(context, summary)
+        }
+    }
+
+    NtPanel(modifier = Modifier.fillMaxWidth()) {
+        SectionHeader(title = "备份与恢复")
+        Spacer(Modifier.height(6.dp))
+        NtCaption(
+            text = "把标签、关注人、关键词、主题、上限、提醒设置等全部导出为一个 JSON 文件。" +
+                "覆盖安装（需先卸载）之前先导出，装好新版再导入，配置即可完整回来。",
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NtButton(
+                text = "导出配置",
+                onClick = { exportLauncher.launch("nuntra-config.json") },
+            )
+            NtButton(
+                text = "导入配置",
+                accent = false,
+                onClick = {
+                    importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                },
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        NtCaption(
+            text = "导入会覆盖同名字段。消息内容不在备份范围内 ——" +
+                "它属于隐私数据，不该写进可以随便分享的普通文件。",
+            color = c.textSecondary,
+        )
     }
 }
 

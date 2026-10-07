@@ -24,6 +24,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          # ★ 必须取全量历史：versionCode 由 git 提交数推导，
+          #   浅克隆（默认 depth=1）下 `git rev-list --count HEAD` 永远是 1，
+          #   版本号就永远不递增了。
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -56,6 +61,29 @@ jobs:
             exit 1
           }
 
+      # ── 固定签名 ──
+      # 没有固定签名时，Actions 每次都是全新运行器，AGP 会**自动生成一个新的
+      # debug 密钥**，于是每次 APK 签名都不同 → Android 拒绝覆盖安装
+      # （INSTALL_FAILED_UPDATE_INCOMPATIBLE）→ 必须先卸载 → DataStore 数据全丢。
+      - name: Configure fixed debug signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            mkdir -p app/keystore
+            printf "%s" "$KEYSTORE_BASE64" | base64 -d > app/keystore/debug.keystore
+            echo "已从 GitHub Secrets 写入固定签名密钥库：$(ls -l app/keystore/debug.keystore)"
+          elif [ -f app/keystore/debug.keystore ]; then
+            echo "使用仓库内的 app/keystore/debug.keystore（已入库的固定签名）"
+          else
+            echo "::warning::未配置固定签名！将使用运行器临时生成的 debug 密钥。"
+            echo "::warning::后果：每次构建的 APK 签名都不同 → 无法覆盖安装 → 必须先卸载 → 数据全丢。"
+            echo "::warning::修复方式（二选一）："
+            echo "::warning::  A) 本地运行 tools/make-debug-keystore.cmd 后提交 app/keystore/debug.keystore"
+            echo "::warning::  B) 把该文件转 base64 存为 GitHub Secret：KEYSTORE_BASE64"
+          fi
+
       # 隐私红线自检：本项目承诺 100% 离线运行，绝不连网。
       - name: Privacy gate (no INTERNET permission / no network dependencies)
         run: |
@@ -73,8 +101,41 @@ jobs:
           fi
           echo "隐私自检通过：无 INTERNET 权限、无网络依赖"
 
+      # applicationId 锁定：它一旦改变，系统会当成另一个应用 —— 覆盖安装失败、数据丢失。
+      - name: applicationId lock gate
+        run: |
+          set -euo pipefail
+          EXPECTED="com.shihua66666.nuntra"
+          ACTUAL=$(grep -oP 'applicationId\s*=\s*"\K[^"]+' app/build.gradle.kts | head -n1)
+          NS=$(grep -oP 'namespace\s*=\s*"\K[^"]+' app/build.gradle.kts | head -n1)
+          echo "applicationId=$ACTUAL namespace=$NS（期望 $EXPECTED）"
+          [ "$ACTUAL" = "$EXPECTED" ] || { echo "ERROR: applicationId 已变更！会导致覆盖安装失败、数据丢失。"; exit 1; }
+          [ "$NS" = "$EXPECTED" ] || { echo "ERROR: namespace 已变更！"; exit 1; }
+          echo "包名锁定校验通过"
+
       - name: Build debug APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew assembleDebug --stacktrace --no-daemon
+
+      # 打印签名指纹：多次构建之间它必须完全一致，否则覆盖安装仍会失败。
+      # 这是「签名是否真的固定」最直接的证据。
+      - name: Report APK signature fingerprint
+        if: always()
+        run: |
+          set -euo pipefail
+          APK=$(ls app/build/outputs/apk/debug/*.apk 2>/dev/null | head -n1 || true)
+          if [ -z "$APK" ]; then echo "未找到 APK，跳过"; exit 0; fi
+          echo "APK: $APK"
+          echo "--- 签名证书（SHA256 指纹应在多次构建间保持不变）---"
+          keytool -printcert -jarfile "$APK" | sed -n "1,14p"
+          echo "--- versionCode / versionName ---"
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -n1 || true)
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --print-certs "$APK" | head -n 20 || true
+          fi
 
       - name: Upload APK
         if: always()

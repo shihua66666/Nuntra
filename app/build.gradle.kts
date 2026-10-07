@@ -7,6 +7,71 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// ══════════════════════════════════════════════════════════════════
+// 版本号：随 git 提交数自动递增
+//
+// 为什么用 git 提交数：
+//   versionCode 必须**严格递增**，否则 Android 会拒绝覆盖安装
+//   （versionCode 回退 + 签名不同 = 必须先卸载 = DataStore 数据全丢）。
+//   手动改容易忘，git 提交数则是「每次推送代码就 +1」的天然单调量。
+//
+// ⚠ CI 必须用 actions/checkout 的 fetch-depth: 0 取全量历史，
+//   浅克隆（默认 depth=1）下 rev-list --count HEAD 永远是 1，版本号就卡死了。
+val gitCommitCount: Int = runCatching {
+    val process = ProcessBuilder("git", "rev-list", "--count", "HEAD")
+        .directory(rootDir)
+        .redirectErrorStream(true)
+        .start()
+    val text = process.inputStream.bufferedReader().use { it.readText() }.trim()
+    process.waitFor()
+    text.toInt()
+}.getOrDefault(0)
+
+/** versionCode 基数：留出低段空间，便于日后手工微调。 */
+val versionCodeBase = 10_000
+val computedVersionCode = versionCodeBase + gitCommitCount
+val computedVersionName = "1.0." + gitCommitCount
+
+// ══════════════════════════════════════════════════════════════════
+// 固定签名
+// ══════════════════════════════════════════════════════════════════
+//
+// 问题：AGP 的默认 debug 签名用 ~/.android/debug.keystore，
+//   而 GitHub Actions 每次都是**全新运行器** → 每次自动生成一个新的 debug 密钥
+//   → 每次 APK 签名都不同 → Android 拒绝覆盖安装
+//   （INSTALL_FAILED_UPDATE_INCOMPATIBLE）→ 必须先卸载 → 标签/关注人/主题全丢。
+//
+// 解决：把签名固定下来。取值优先级：
+//   1) 环境变量 KEYSTORE_PATH（CI 里由 Secrets 解码后指定）
+//   2) 仓库内 app/keystore/debug.keystore（debug 专用库，密码是公开约定值，可入库）
+//   3) keystore.properties 里的 storeFile（本地使用，不入库）
+val debugKeystorePassword = "android"
+val debugKeystoreAlias = "androiddebugkey"
+
+val keystoreProps = java.util.Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) runCatching { f.inputStream().use { load(it) } }
+        .onFailure { println("[nuntra] 读取 keystore.properties 失败：${it.message}") }
+}
+
+fun signingValue(propKey: String, envKey: String): String? =
+    (System.getenv(envKey) ?: keystoreProps.getProperty(propKey))?.takeIf { it.isNotBlank() }
+
+val fixedKeystoreFile: java.io.File? = run {
+    val fromEnv = System.getenv("KEYSTORE_PATH")?.takeIf { it.isNotBlank() }?.let { java.io.File(it) }
+    if (fromEnv != null && fromEnv.exists()) return@run fromEnv
+    val inRepo = rootProject.file("app/keystore/debug.keystore")
+    if (inRepo.exists()) return@run inRepo
+    keystoreProps.getProperty("storeFile")?.let { rootProject.file(it) }?.takeIf { it.exists() }
+}
+val hasFixedSigning = fixedKeystoreFile != null
+
+println("[nuntra] versionCode=$computedVersionCode versionName=$computedVersionName gitCommits=$gitCommitCount")
+println(
+    "[nuntra] 固定签名=" + (fixedKeystoreFile?.absolutePath
+        ?: "未配置 → 将使用运行器临时 debug 密钥（APK 无法覆盖安装，会丢数据！）"),
+)
+
 android {
     namespace = "com.shihua66666.nuntra"
     // 36 是 AGP 8.13.2 支持的上限；依赖已按此核对过 minCompileSdk
@@ -16,8 +81,8 @@ android {
         applicationId = "com.shihua66666.nuntra"
         minSdk = 29
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = computedVersionCode
+        versionName = computedVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -28,9 +93,30 @@ android {
         // 全语言资源的 APK 体积代价很小，但换来的是在 AGP 8/9 上都能编译。
     }
 
+    // 固定签名配置：只有拿到密钥库时才创建，
+    // 否则 AGP 会在配置阶段因为 storeFile 不存在而直接失败。
+    signingConfigs {
+        if (hasFixedSigning) {
+            create("fixed") {
+                storeFile = fixedKeystoreFile
+                // 密码优先级：环境变量 → keystore.properties → debug 公开约定值
+                storePassword = signingValue("storePassword", "KEYSTORE_PASSWORD")
+                    ?: debugKeystorePassword
+                keyAlias = signingValue("keyAlias", "KEY_ALIAS") ?: debugKeystoreAlias
+                keyPassword = signingValue("keyPassword", "KEY_PASSWORD")
+                    ?: debugKeystorePassword
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
+            // ★★ 关键：debug 也用固定签名 ★★
+            //   不固定的话 CI 每次都会生成新密钥，APK 无法覆盖安装。
+            if (hasFixedSigning) {
+                signingConfig = signingConfigs.getByName("fixed")
+            }
         }
         release {
             isMinifyEnabled = false

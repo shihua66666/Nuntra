@@ -56,6 +56,27 @@ class SettingsRepository(
 
     // ── 短信监控 ─────────────────────────────────────────────────
     /** 短信监控开关（默认开启；只用通知监听，不申请短信权限）。 */
+    /**
+     * 整体替换关键词（导入配置用）。
+     *
+     * 逐个 addKeyword 也能work，但导入时需要「以备份为准」——
+     * 用户可能删过词，追加式导入会把删掉的词又带回来。
+     */
+    suspend fun replaceKeywords(words: Set<String>) {
+        runCatching {
+            val cleaned = words.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+            store.edit { it[KEY_KEYWORDS] = cleaned }
+        }.onFailure { Logx.swallow("SettingsRepository", "replaceKeywords", it) }
+    }
+
+    /** 整体替换短信关键词（导入配置用）；空集合时回退默认词，避免短信监控变「全收」。 */
+    suspend fun replaceSmsKeywords(words: Set<String>) {
+        runCatching {
+            val cleaned = words.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+            store.edit { it[KEY_SMS_KEYWORDS] = if (cleaned.isEmpty()) DEFAULT_SMS_KEYWORDS else cleaned }
+        }.onFailure { Logx.swallow("SettingsRepository", "replaceSmsKeywords", it) }
+    }
+
     val smsMonitoringEnabled: Flow<Boolean> = store.data.map { it[KEY_SMS_ENABLED] ?: true }
 
     suspend fun setSmsMonitoringEnabled(value: Boolean) = runCatching {

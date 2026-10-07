@@ -238,6 +238,41 @@ class TagRepository(private val context: Context) {
 
     // ── 内部实现 ─────────────────────────────────────────────────
 
+    /**
+     * 用备份数据**整体替换**标签与关注人（导入配置用）。
+     *
+     * 为什么不能用「逐个 addTag / upsertContact」：
+     *   · 消息只存 tagId，所以必须保留备份里的 id —— 逐个新增会生成新 id，
+     *     导入后所有既有消息的标签归属会全部错位；
+     *   · isDefault 与 priority 也必须按备份还原，逐个添加无法保证。
+     *
+     * 关注人里指向不存在标签的条目会被丢弃，否则会留下永远无法命中的死绑定。
+     */
+    suspend fun replaceAll(
+        newTags: List<Tag>,
+        newContacts: List<WatchedContact>,
+    ): TagOpResult {
+        if (newTags.isEmpty()) return TagOpResult.Failure(TagOpError.LAST_TAG)
+        val normalized = normalize(newTags)
+        val validIds = normalized.map { it.id }.toSet()
+        val safeContacts = newContacts
+            .filter { it.name.isNotBlank() && it.tagId in validIds }
+            .distinctBy { it.name.lowercase() }
+        return runCatching {
+            store.edit { prefs ->
+                prefs[KEY_TAGS] = json.encodeToString(tagCodec, normalized)
+                prefs[KEY_TAGS_INITIALIZED] = true
+                prefs[KEY_WATCHED] = json.encodeToString(contactCodec, safeContacts)
+            }
+            _tags.value = normalized
+            _watched.value = safeContacts
+            TagOpResult.Success
+        }.getOrElse { tr ->
+            Logx.swallow("TagRepository", "replaceAll", tr)
+            TagOpResult.Failure(TagOpError.STORAGE_ERROR)
+        }
+    }
+
     private suspend fun persistTags(next: List<Tag>) {
         val normalized = normalize(next)
         runCatching {

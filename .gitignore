@@ -30,10 +30,17 @@ release/
 obj/
 libs/
 
-# ── 签名（绝不入库）────────────────────────────────────
+# ── 签名 ──────────────────────────────────────────────
 *.jks
 *.keystore
 keystore.properties
+
+# 例外：debug 专用密钥库**允许入库**。
+# 理由：它的密码是 Android 公开约定值（android / androiddebugkey），
+#       本来就无法保密；而把它入库能让 CI 的签名完全确定，
+#       从而支持覆盖安装、不再丢数据。
+# ⚠ 仅限 debug。将来做 release / 上架，请另建密钥并只放 GitHub Secrets。
+!app/keystore/debug.keystore
 
 # ── 系统 / 编辑器 ──────────────────────────────────────
 .DS_Store

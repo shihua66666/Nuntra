@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.WindowManager
 // ★ 属性委托必需（uiState 用了 var uiState by mutableStateOf(...)）。
@@ -26,6 +27,8 @@ import com.shihua66666.nuntra.R
 import com.shihua66666.nuntra.core.Logx
 import com.shihua66666.nuntra.core.NtToast
 import com.shihua66666.nuntra.core.ServiceLocator
+import com.shihua66666.nuntra.ui.overlay.StaticOverlayCapsule
+import com.shihua66666.nuntra.ui.theme.AppColors
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -231,7 +234,24 @@ class OverlayService : Service(), OverlayGestureCallbacks {
             return
         }
         serviceScope.launch {
-            val colors = ServiceLocator.c.themeController.current()
+            // ★★ 延迟挂载 + 就绪等待（防「空壳崩溃」）★★
+            //
+            //   为什么需要：OverlayService 由 startForegroundService 启动，
+            //   它的 onCreate 有可能赶在 Application.onCreate 中的 ServiceLocator.init 完成之前执行。
+            //   此时 ServiceLocator.c 会抛 IllegalStateException —— 而它一旦发生在**组合期**，
+            //   就无法被任何 try-catch 拦住（会直接杀掉进程）。
+            //
+            //   这里先等一个固定窗口让主进程把单例装配完，再轮询确认（有上限，绝不无限等）。
+            //   即使最终仍未就绪也照常挂载 —— 内容会走「静态空壳」分支，不读任何数据源。
+            kotlinx.coroutines.delay(MOUNT_DELAY_MS)
+            if (!awaitContainerReady()) {
+                Logx.w(TAG, "容器未就绪，将以静态空壳挂载（内容不依赖任何数据源）")
+            }
+
+            // 主题色读取也要兜底：容器可能仍未就绪
+            val colors = runCatching {
+                ServiceLocator.appContainerOrNull?.themeController?.current()
+            }.getOrNull() ?: AppColors.GLAID_BLUE
 
             // 1) 建 ComposeView（此时尚未 attach，生命周期钩子由控制器在正确时机回调）
             val composeView = runCatching {
@@ -287,6 +307,21 @@ class OverlayService : Service(), OverlayGestureCallbacks {
     private fun canDrawOverlays(): Boolean = runCatching {
         Settings.canDrawOverlays(this)
     }.getOrDefault(false)
+
+    /**
+     * 等待依赖容器就绪。
+     *
+     * **必须有上限**：否则一旦容器永远不会就绪（例如 Application 初始化失败），
+     * 这里就会一直空转。超时后返回 false，由调用方走「静态空壳」路径 ——
+     * 显示一个安静的小点，也好过崩溃或永远不出现。
+     */
+    private suspend fun awaitContainerReady(timeoutMs: Long = CONTAINER_WAIT_MS): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (!ServiceLocator.isInitialized && SystemClock.elapsedRealtime() < deadline) {
+            kotlinx.coroutines.delay(50L)
+        }
+        return ServiceLocator.isInitialized
+    }
 
     // ── 手势回调 ─────────────────────────────────────────────────
 
@@ -496,11 +531,28 @@ class OverlayService : Service(), OverlayGestureCallbacks {
      */
     @Composable
     private fun OverlayServiceContent() {
-        val colors = ServiceLocator.c.themeController.colors.collectAsState().value
-        val tags by ServiceLocator.c.tagRepository.tags.collectAsState()
-        val messages by ServiceLocator.c.messageStore.sorted.collectAsState()
+        // ★★ 组合期绝不能调用会抛异常的访问器 ★★
+        //
+        //   ServiceLocator.c 的定义是 error(...) 非空断言，注释里也明确写着
+        //   「UI 层不要直接用这个，以免闪退」。组合期抛出的异常无法被 try-catch 拦截，
+        //   会直接杀掉进程 —— 这就是「空壳崩溃」最典型的成因。
+        //
+        //   因此这里统一走 appContainerOrNull；为 null 时渲染**不读任何数据源**的静态空壳。
+        val container = ServiceLocator.appContainerOrNull
+        if (container == null) {
+            Logx.w(TAG, "容器未就绪：悬浮窗降级为静态空壳")
+            StaticOverlayCapsule()
+            return
+        }
+
+        val colors = container.themeController.colors.collectAsState().value
+        val tags by container.tagRepository.tags.collectAsState()
+        val messages by container.messageStore.sorted.collectAsState()
         val state = uiState
-        val tagViews = remember(tags, messages) { ServiceLocator.c.messageStore.tagViews(tags) }
+        // tagViews 构造失败时退回空列表：空列表会被 UI 当成「无标签」，绝不崩
+        val tagViews = remember(tags, messages) {
+            runCatching { container.messageStore.tagViews(tags) }.getOrDefault(emptyList())
+        }
 
         OverlayContent(
             colors = colors,
@@ -521,7 +573,7 @@ class OverlayService : Service(), OverlayGestureCallbacks {
             onSelectAll = { uiState = uiState.copy(selectedTagIds = emptySet()) },
             onToggleFilter = { uiState = uiState.withFilterVisible(!uiState.filterVisible) },
             onOpenSettings = { openApp() },
-            onClearMessages = { ServiceLocator.c.messageStore.clear() },
+            onClearMessages = { runCatching { container.messageStore.clear() } },
                 onCollapse = { collapseToCapsule() },
             messageList = {
                 MessageList(
@@ -531,7 +583,7 @@ class OverlayService : Service(), OverlayGestureCallbacks {
                     // 展开面板时已整体标记过已读；这里覆盖「展开后新到」的消息。
                     // 第 5 步会在此基础上加 contentIntent.send() 跳转原 App。
                     onMessageClick = { message ->
-                        ServiceLocator.c.messageStore.markRead(message.id)
+                        runCatching { container.messageStore.markRead(message.id) }
                     },
                 )
             },
@@ -540,6 +592,12 @@ class OverlayService : Service(), OverlayGestureCallbacks {
 
     companion object {
         private const val TAG = "OverlayService"
+
+        /** 挂载前的固定延迟（ms）：让主进程把单例装配完再挂窗口。 */
+        private const val MOUNT_DELAY_MS = 500L
+
+        /** 等待容器就绪的上限（ms）：超时则走静态空壳，绝不无限等待。 */
+        private const val CONTAINER_WAIT_MS = 3000L
 
         /**
          * 悬浮窗是否真的已挂载到 WindowManager。

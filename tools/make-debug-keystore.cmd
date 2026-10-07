@@ -1,89 +1,89 @@
 @echo off
-setlocal enabledelayedexpansion
-chcp 65001 >nul
+setlocal
 cd /d "%~dp0.."
 
 echo.
 echo ============================================================
-echo  Nuntra - 生成固定 debug 签名密钥库
+echo  Nuntra - generate fixed debug keystore
 echo ============================================================
 echo.
-echo  为什么需要：不固定签名，每次 CI 构建的 APK 签名都不同，
-echo  Android 会拒绝覆盖安装，必须先卸载 -^> 数据（标签/关注人/主题）全丢。
+echo  Why this exists:
+echo    Without a FIXED signature, every CI build is signed with a
+echo    brand new key, so Android refuses to install over the old
+echo    app. You would have to uninstall first, which wipes all
+echo    saved data (tags, watched contacts, theme...).
+echo.
+echo  IMPORTANT - no local JDK?
+echo    Do NOT use this script. Run the GitHub workflow instead:
+echo      Actions  -  Generate Debug Keystore  -  Run workflow
+echo    then download the artifact and unzip debug.keystore into
+echo      app\keystore\debug.keystore
 echo.
 
-if exist "app\keystore\debug.keystore" (
-    echo [跳过] app\keystore\debug.keystore 已存在。
-    echo         如果你想重新生成，请先删除它再运行本脚本。
-    goto :printbase64
-)
+set "KS=app\keystore\debug.keystore"
 
-rem ---- 定位 keytool：PATH 装不好就找 Android Studio 自带的 JBR ----
+if exist "%KS%" goto :already
+
+rem ---- locate keytool: PATH first, then JAVA_HOME, then Android Studio JBR ----
 set "KEYTOOL="
 for %%K in (keytool.exe) do if not defined KEYTOOL set "KEYTOOL=%%~$PATH:K"
-if defined KEYTOOL goto :found
+if not defined KEYTOOL if defined JAVA_HOME if exist "%JAVA_HOME%\bin\keytool.exe" set "KEYTOOL=%JAVA_HOME%\bin\keytool.exe"
+if not defined KEYTOOL if exist "%LOCALAPPDATA%\Programs\Android Studio\jbr\bin\keytool.exe" set "KEYTOOL=%LOCALAPPDATA%\Programs\Android Studio\jbr\bin\keytool.exe"
+if not defined KEYTOOL if exist "%LOCALAPPDATA%\Programs\Android Studio1\jbr\bin\keytool.exe" set "KEYTOOL=%LOCALAPPDATA%\Programs\Android Studio1\jbr\bin\keytool.exe"
+if not defined KEYTOOL if exist "%ProgramFiles%\Android\Android Studio\jbr\bin\keytool.exe" set "KEYTOOL=%ProgramFiles%\Android\Android Studio\jbr\bin\keytool.exe"
+if not defined KEYTOOL if exist "%ProgramFiles%\Android\Android Studio1\jbr\bin\keytool.exe" set "KEYTOOL=%ProgramFiles%\Android\Android Studio1\jbr\bin\keytool.exe"
 
-if defined JAVA_HOME if exist "%JAVA_HOME%\bin\keytool.exe" set "KEYTOOL=%JAVA_HOME%\bin\keytool.exe"
-if defined KEYTOOL goto :found
-
-for %%D in (
-    "%LOCALAPPDATA%\Programs\Android Studio\jbr\bin\keytool.exe"
-    "%LOCALAPPDATA%\Programs\Android Studio1\jbr\bin\keytool.exe"
-    "%ProgramFiles%\Android\Android Studio\jbr\bin\keytool.exe"
-    "%ProgramFiles%\Android\Android Studio1\jbr\bin\keytool.exe"
-    "%ProgramFiles(x86)%\Android\Android Studio\jbr\bin\keytool.exe"
-    "%ProgramFiles%\JetBrains\IntelliJ IDEA\jbr\bin\keytool.exe"
-) do (
-    if not defined KEYTOOL if exist %%D set "KEYTOOL=%%~D"
-)
-
-:found
-if not defined KEYTOOL (
-    echo [错误] 找不到 keytool。
-    echo        请任选其一：
-    echo          1^) 用 Android Studio 打开本工程，它自带 JDK；然后重跑本脚本
-    echo          2^) 安装 JDK 17 并把 JAVA_HOME 指向它
-    echo          3^) 在 Android Studio 里 Build -^> Generate Signed Bundle / APK 生成
-    exit /b 1
-)
-echo [信息] 使用 keytool: %KEYTOOL%
-
-mkdir "app\keystore" 2>nul
-
-"%KEYTOOL%" -genkeypair -v ^
-  -keystore "app\keystore\debug.keystore" ^
-  -storetype PKCS12 ^
-  -alias androiddebugkey ^
-  -keyalg RSA -keysize 2048 -validity 10950 ^
-  -storepass android -keypass android ^
-  -dname "CN=Android Debug,O=Android,C=US"
-
-if not exist "app\keystore\debug.keystore" (
-    echo [错误] 生成失败，密钥库不存在。
-    exit /b 1
-)
+if defined KEYTOOL goto :havekeytool
+echo [ERROR] keytool not found on this machine.
 echo.
-echo [成功] 已生成 app\keystore\debug.keystore
-echo        别名=androiddebugkey   口令=android  ^(debug 专用，公开约定值^)
+echo   Option A - use the cloud workflow, no JDK needed:
+echo     GitHub  -  Actions  -  Generate Debug Keystore  -  Run workflow
+echo.
+echo   Option B - install a JDK 17 and set JAVA_HOME, then rerun.
+echo.
+echo   Option C - open the project in Android Studio and use
+echo     Build  -  Generate Signed Bundle / APK
+echo.
+exit /b 1
 
-:printbase64
+:havekeytool
+echo [info] using keytool: %KEYTOOL%
+
+if not exist "app\keystore" mkdir "app\keystore"
+
+"%KEYTOOL%" -genkeypair -v -keystore "%KS%" -storetype PKCS12 -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10950 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=USA"
+
+if not exist "%KS%" goto :failed
+echo.
+echo [OK] created %KS%
+goto :next
+
+:already
+echo [skip] %KS% already exists.
+echo        Delete it first if you really want to regenerate.
+
+:next
 echo.
 echo ============================================================
-echo  下一步（二选一）
+echo  Next step
 echo ============================================================
 echo.
-echo  方案 A（推荐，零配置）：把生成的文件提交进仓库 ——
+echo  Commit it so CI always signs with the same key:
+echo.
 echo      git add -f app/keystore/debug.keystore
-echo      git commit -m "build: 固定 debug 签名密钥库"
+echo      git commit -m "build: add fixed debug keystore"
 echo      git push
-echo    推送后 CI 会自动使用它，签名从此固定。
 echo.
-echo  方案 B（更严格）：放进 GitHub Secrets ——
-echo    下面会打印 base64，粘贴到：
-echo      GitHub 仓库 -^> Settings -^> Secrets and variables -^> Actions -^> New secret
-echo      名称：KEYSTORE_BASE64
-echo    （别名与口令用默认值即可，无需再配其他 secret）
-echo.
-powershell -NoProfile -Command "$b=[Convert]::ToBase64String([IO.File]::ReadAllBytes('app\keystore\debug.keystore')); Write-Host '=== KEYSTORE_BASE64（复制下面整行）===' -ForegroundColor Green; Write-Host $b"
+echo  This is a DEBUG-only keystore. Its password is the public
+echo  Android convention android / androiddebugkey, so it is NOT
+echo  a secret. Never reuse it for a release build or for Play.
 echo.
 pause
+exit /b 0
+
+:failed
+echo [ERROR] generation failed - keystore was not created.
+echo         See the keytool output above for the reason.
+echo.
+pause
+exit /b 1

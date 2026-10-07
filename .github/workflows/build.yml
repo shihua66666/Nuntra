@@ -45,7 +45,7 @@ jobs:
         run: |
           echo "=========================================================="
           echo " Nuntra CI 构建指纹"
-          echo " 工作流版本: fixed-signing + versionCode + backup/restore v2"
+          echo " 工作流版本: v3（gradle 直连，不经 wrapper）"
           echo " commit   : ${{ github.sha }}"
           echo " run      : #${{ github.run_number }}  attempt ${{ github.run_attempt }}"
           echo " 时间(UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -67,22 +67,35 @@ jobs:
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
 
-      - name: Prepare Gradle wrapper
+      # ★★ 这里改成「直接校验 setup-gradle 装好的 gradle」，不再现场生成 wrapper ★★
+      #
+      # 上一轮 CI 就是死在原来那段上（步骤 Prepare Gradle wrapper 退出码 1，
+      # 后面 4 个步骤全被跳过）。原因是：
+      #   仓库的 gradle/wrapper/ 里**只有 gradle-wrapper.properties，没有 gradle-wrapper.jar**
+      #   （实测 contents API：该目录只返回 1 个文件），于是每次 CI 都得先跑
+      #     gradle wrapper --gradle-version 8.13 --distribution-type bin
+      #   现场生成它。而 `gradle wrapper` 会**完整配置整个构建** ——
+      #   任何配置期问题都会让这一步失败，后面的 chmod / ./gradlew --version 自然跟着挂。
+      #
+      # 但其实完全没必要：gradle/actions/setup-gradle 已经把 Gradle 8.13 装好并放进 PATH，
+      # 版本同样被钉死。直接用 `gradle` 构建，就少掉「生成 wrapper → 拉发行版 → 比对版本」
+      # 这一整条易碎链路。
+      - name: Verify Gradle version
         run: |
           set -euo pipefail
-          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            echo "wrapper jar 缺失，使用 Gradle ${GRADLE_VERSION} 生成（版本显式指定，不会漂移）"
-            gradle wrapper --gradle-version "${GRADLE_VERSION}" --distribution-type bin
-          else
-            echo "wrapper jar 已存在，保持不变"
-          fi
-          chmod +x ./gradlew
-          echo "--- 版本自检 ---"
-          ./gradlew --version | tee wrapper-version.txt
-          grep -q "${GRADLE_VERSION}" wrapper-version.txt || {
-            echo "ERROR: wrapper 报告的 Gradle 版本与预期的 ${GRADLE_VERSION} 不一致"
+          echo "--- 运行器上的 gradle --version ---"
+          # 注意 || true：万一 gradle 打印了警告并返回非零，也不能在这里就把 job 打死，
+          # 先把输出完整打出来，再用显式判断决定成败（这样失败时一眼能看到原因）。
+          gradle --version --console=plain 2>&1 | tee gradle-version.txt || true
+          if ! grep -q "${GRADLE_VERSION}" gradle-version.txt; then
+            echo "======================================================"
+            echo "ERROR: 运行器上的 Gradle 版本与预期的 ${GRADLE_VERSION} 不一致"
+            echo "---- gradle-version.txt ----"
+            cat gradle-version.txt
+            echo "======================================================"
             exit 1
-          }
+          fi
+          echo "Gradle ${GRADLE_VERSION} 已就绪，本次构建全程使用它（不经 wrapper）"
 
       # ── 固定签名 ──
       # 没有固定签名时，Actions 每次都是全新运行器，AGP 会**自动生成一个新的
@@ -190,9 +203,11 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          # 用 gradle（setup-gradle 装好的 8.13）而不是 ./gradlew：
+          # 仓库里没有 gradle-wrapper.jar，走 wrapper 会多一条易碎链路（见上一段说明）。
           # 保留完整输出到文件：失败时下面的步骤会把它打印到控制台，
           # 这样你不下载 artifact 也能直接看到真正的错误。
-          ./gradlew assembleDebug --stacktrace --no-daemon --console=plain 2>&1 | tee gradle-build.log
+          gradle assembleDebug --stacktrace --no-daemon --console=plain 2>&1 | tee gradle-build.log
 
       # ★ 失败时把真错误直接打到控制台，避免只看到一句 BUILD FAILED。
       - name: Dump Gradle failure (quick read)

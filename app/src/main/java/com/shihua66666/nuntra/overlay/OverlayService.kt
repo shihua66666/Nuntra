@@ -149,6 +149,10 @@ class OverlayService : Service(), OverlayGestureCallbacks {
             serviceScope = serviceScope,
         )
         touchInterceptor = OverlayTouchInterceptor(applicationContext)
+        // ★★ 建立生命周期透传：控制器回调落在 touchInterceptor 上，
+        //    而 owner 在 composeHost 里。不建立这条链路，owner 永远不会被推进，
+        //    悬浮窗会在挂载后异步崩溃（ViewTreeLifecycleOwner 相关问题）。
+        touchInterceptor.lifecycleRelay = composeHost
         gesture = OverlayGestureDetector(applicationContext, this).also { detector ->
             // 拦截容器在「越阈值开始抢手势」时会调用 beginGesture 同步基准点
             touchInterceptor.gesture = detector
@@ -270,6 +274,29 @@ class OverlayService : Service(), OverlayGestureCallbacks {
             // 2) 套进触摸拦截容器：拖动与内部点击共存的关键。
             //    注意每轮只能 addView 一次 —— 拦截容器里只放这一个子 View。
             touchInterceptor.removeAllViews()
+
+            // ★★★ 2.5 关键修复：把三个 ViewTree owner 注入到「即将 addView 的根 View」★★★
+            //
+            //   Compose 创建 Recomposer 时，是从**窗口根 View** 向上查找 ViewTreeLifecycleOwner
+            //   （WindowRecomposer_androidKt.createLifecycleAwareWindowRecomposer）。
+            //   这一棵树的根是 touchInterceptor，而 ComposeView 只是它的子 View ——
+            //   所以 owner 只挂在 ComposeView 上会导致：
+            //
+            //     IllegalStateException: ViewTreeLifecycleOwner not found from OverlayTouchInterceptor
+            //
+            //   这是**异步**崩溃（addView 返回成功后才创建 Recomposer），调用处 try-catch 兜不住。
+            //
+            //   顺序严格如下：注入 owner → 加子 View → attach(addView)，不可颠倒。
+            composeHost.bindOwnersTo(touchInterceptor)
+
+            // ★ 2.6 addView 前自检：把「挂载后的异步崩溃」提前成「挂载前的明确报错」
+            val ownerIssue = composeHost.verifyOwners(touchInterceptor)
+            if (ownerIssue != null) {
+                Logx.e(TAG, "悬浮窗 owner 注入不完整：" + ownerIssue)
+                NtToast.show(this@OverlayService, "悬浮窗 owner 注入不完整：" + ownerIssue)
+                return@launch
+            }
+
             touchInterceptor.addView(
                 composeView,
                 android.widget.FrameLayout.LayoutParams(

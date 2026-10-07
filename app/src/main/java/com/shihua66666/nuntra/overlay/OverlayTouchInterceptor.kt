@@ -73,18 +73,40 @@ class OverlayTouchInterceptor @JvmOverloads constructor(
     }
 
     // ── OverlayComposeHostAccessor ───────────────────────────────
-    // WindowManager 挂载的是本容器（它才是 touch 的最外层），
-    // 但生命周期归内部的 ComposeView，因此这里做一层透传。
+    //
+    // WindowManager 挂载的是本容器（它才是触摸的最外层），而控制器回调的
+    // onBeforeAdd / onAfterAdd / onAfterRemove 也落在本容器上；
+    // 但真正持有 owner（OverlayLifecycleProvider）的是 OverlayComposeHost。
+    //
+    // ★★ 这里曾经写成 `(getChildAt(0) as? OverlayComposeHostAccessor)`，是个致命错误：
+    //    子 View 是 ComposeView，而 ComposeView **并不实现该接口**，
+    //    转型恒为 null，安全调用直接跳过 —— 生命周期回调被**静默丢弃**。
+    //    后果：owner.onCreate() 从未执行 → SavedStateRegistry.performAttach 从未调用 →
+    //    owner 永远停在 INITIALIZED → Compose 拿不到可用生命周期，挂载后异步崩溃。
+    //
+    // 现在改为显式持有的 relay，由 OverlayService 在创建后立即赋值。
+    // 保留 getChildAt 兜底：万一将来子 View 也实现了该接口，行为不变。
+    // ─────────────────────────────────────────────────────────────
+
+    /** 生命周期透传目标（由 OverlayService 在创建后赋值为 OverlayComposeHost）。 */
+    var lifecycleRelay: OverlayComposeHostAccessor? = null
+
+    private fun relay(): OverlayComposeHostAccessor? =
+        lifecycleRelay ?: (getChildAt(0) as? OverlayComposeHostAccessor)
 
     override fun onBeforeAdd() {
-        (getChildAt(0) as? OverlayComposeHostAccessor)?.onBeforeAdd()
+        val target = relay()
+        if (target == null) {
+            android.util.Log.e("OverlayTouchInterceptor", "lifecycleRelay 为空，onBeforeAdd 未转发")
+        }
+        target?.onBeforeAdd()
     }
 
     override fun onAfterAdd() {
-        (getChildAt(0) as? OverlayComposeHostAccessor)?.onAfterAdd()
+        relay()?.onAfterAdd()
     }
 
     override fun onAfterRemove() {
-        (getChildAt(0) as? OverlayComposeHostAccessor)?.onAfterRemove()
+        relay()?.onAfterRemove()
     }
 }

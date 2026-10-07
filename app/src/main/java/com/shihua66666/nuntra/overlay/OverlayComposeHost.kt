@@ -18,12 +18,15 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.findViewTreeLifecycleOwner
+import androidx.lifecycle.findViewTreeViewModelStoreOwner
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
+import androidx.savedstate.findViewTreeSavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.shihua66666.nuntra.core.Logx
 import com.shihua66666.nuntra.ui.theme.AppColors
@@ -173,6 +176,49 @@ class OverlayComposeHost(private val appContext: Context) : OverlayComposeHostAc
         }
         composeView = view
         return view
+    }
+
+    /**
+     * 把三个 ViewTree owner 注入到**真正被 addView 的那个根 View** 上。
+     *
+     * ★★★ 这是修「ViewTreeLifecycleOwner not found」的关键 ★★★
+     *
+     * Compose 在创建 Recomposer 时，是从**窗口的根 View** 出发向上查找
+     * ViewTreeLifecycleOwner（见 androidx.compose.ui.platform.WindowRecomposer_androidKt
+     * .createLifecycleAwareWindowRecomposer）。
+     *
+     * 悬浮窗这一棵 View 树的根是 [OverlayTouchInterceptor]（它才是 addView 的对象），
+     * 而 ComposeView 只是它的**子 View**。若 owner 只挂在子 ComposeView 上，
+     * 从根向上查找必然失败，抛出：
+     *
+     *     IllegalStateException: ViewTreeLifecycleOwner not found from OverlayTouchInterceptor
+     *
+     * 注意这是**异步**崩溃：addView 返回成功，随后挂载到窗口时才创建 Recomposer，
+     * 所以调用处包 try-catch 是兜不住的。
+     *
+     * 因此 owner 必须挂在根 View 上。ComposeView 上也保留一份（见 [createView]）作为冗余：
+     * 查找总是取离起点最近的那份，两边都有时行为一致。
+     *
+     * 调用时机要求：**必须在 addView 之前**（顺序见 OverlayService.syncOverlay）。
+     */
+    fun bindOwnersTo(root: View) {
+        root.setViewTreeLifecycleOwner(owner)
+        root.setViewTreeViewModelStoreOwner(owner)
+        root.setViewTreeSavedStateRegistryOwner(owner)
+    }
+
+    /**
+     * addView 前的最后一道自检：确认三个 owner 都能从 [root] 查到。
+     *
+     * 返回 null 表示 OK；否则返回缺失项的人话描述。
+     * 存在的意义：把「挂载后异步崩溃」变成「挂载前的明确报错」——
+     * 前者用户什么都看不到，后者能当场指出问题。
+     */
+    fun verifyOwners(root: View): String? {
+        if (root.findViewTreeLifecycleOwner() == null) return "ViewTreeLifecycleOwner 缺失"
+        if (root.findViewTreeViewModelStoreOwner() == null) return "ViewTreeViewModelStoreOwner 缺失"
+        if (root.findViewTreeSavedStateRegistryOwner() == null) return "ViewTreeSavedStateRegistryOwner 缺失"
+        return null
     }
 
     /**

@@ -481,26 +481,52 @@ private fun PermissionSection(
         NtDivider()
         Spacer(Modifier.height(10.dp))
 
-        // ── 一加 / ColorOS 专属：厂商页面无法保证跳转成功，因此给文字路径 ──
-        SectionHeader(title = "一加 / ColorOS 保活")
+        // ── 保活设置：这是「一键清理后浮窗自动回来」能否生效的前提 ──
+        SectionHeader(title = "保活设置（必做）")
         Spacer(Modifier.height(6.dp))
+        // 用警示色，因为不完成这两步，「被清理后自动复活」在国产 ROM 上大概率失效
         NtCaption(
-            text = "ColorOS 的「自启动」「后台活动」没有公开 API，跳转可能失败。" +
-                "若下面的按钮打不开，请手动按路径设置：" +
-                "设置 → 应用 → 应用管理 → 找到 Nuntra → 允许自启动 / 允许后台活动。",
+            text = "⚠ 不完成下面两步，手机管家「一键清理」后悬浮窗不会自动回来。",
+            color = c.warning,
+        )
+        Spacer(Modifier.height(8.dp))
+        NtCaption(
+            text = "① 允许自启动 ② 允许锁屏后台运行",
+            color = c.textPrimary,
+        )
+        Spacer(Modifier.height(4.dp))
+        NtCaption(
+            text = "路径：手机管家 → 应用管理 → 找到「Nuntra」→ 开启「自启动」与「锁屏后台运行」。" +
+                "部分系统的入口在「设置 → 应用 → 应用管理 → 权限管理」。",
         )
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             NtButton(
-                text = "尝试打开自启动设置",
-                accent = false,
+                text = "打开自启动设置",
                 onClick = { PermissionNavigator.openColorOsAutoStart(context) },
+            )
+            NtButton(
+                text = "打开应用详情页",
+                accent = false,
+                onClick = { PermissionNavigator.openAppDetails(context) },
             )
         }
         Spacer(Modifier.height(6.dp))
         NtCaption(
-            text = "提示：本应用不申请也未使用「后台弹出界面」这类权限；" +
-                "悬浮窗是否可显示由系统按 SYSTEM_ALERT_WINDOW（即上面的悬浮窗权限）判定。",
+            text = "厂商页面没有公开 API，按钮可能打不开 —— 那时请按上面的路径手动设置。",
+            color = c.textSecondary,
+        )
+        Spacer(Modifier.height(6.dp))
+        NtCaption(
+            text = "另外请把电池优化设为「不限制」（上一项）；" +
+                "已内置三重自动恢复（亮屏检查 / 5 分钟守护 / 服务销毁后 2 秒重试），" +
+                "但系统级的自启动开关必须由你手动打开。",
+            color = c.textSecondary,
+        )
+        Spacer(Modifier.height(6.dp))
+        NtCaption(
+            text = "说明：本应用不申请也未使用「后台弹出界面」这类权限；" +
+                "悬浮窗能否显示由系统按 SYSTEM_ALERT_WINDOW（即上面的悬浮窗权限）判定。",
             color = c.textSecondary,
         )
 

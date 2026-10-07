@@ -50,9 +50,13 @@ object OverlayWatchdog {
     /** 用户点击保底通知触发的恢复。 */
     const val ACTION_RESTORE = "com.shihua66666.nuntra.action.RESTORE_OVERLAY"
 
+    /** 请求「卸载并完整重建」服务实例（守护发现只挂上了空壳时使用）。 */
+    const val ACTION_REBUILD = "com.shihua66666.nuntra.action.REBUILD_OVERLAY"
+
     private const val RC_WATCHDOG = 3001
     private const val RC_RESTORE = 3002
     private const val RC_OPEN = 3003
+    private const val RC_RETRY = 3004
 
     /** 保底通知的 id：与前台服务通知（1001）区分开。 */
     private const val NOTIFICATION_ID_RESTORE = 1002
@@ -61,6 +65,30 @@ object OverlayWatchdog {
 
     /** 守护间隔：5 分钟（需求指定）。 */
     const val INTERVAL_MS = 5L * 60L * 1000L
+
+    /** 服务销毁后立即重试的延时（需求：2 秒）。 */
+    const val IMMEDIATE_RETRY_MS = 2_000L
+
+    /** 一轮恢复里允许的最大重试次数 —— 防止无限重启循环。 */
+    private const val MAX_RETRIES = 3
+
+    /** 健康检查：超时与轮询间隔。总耗时必须远小于 BroadcastReceiver 的 10 秒上限。 */
+    private const val HEALTH_TIMEOUT_MS = 2_500L
+    private const val HEALTH_POLL_MS = 100L
+
+    /** 发出重建指令后等待旧实例退出的时间。 */
+    private const val REBUILD_SETTLE_MS = 500L
+
+    /** 已重试次数：窗口挂载成功即清零。 */
+    private val retries = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** 窗口挂载成功时调用：重置重试计数，让守护回到「随时可救」的状态。 */
+    fun resetRetries() {
+        retries.set(0)
+    }
+
+    /** 当前已重试次数（供日志与自检）。 */
+    fun retryCount(): Int = retries.get()
 
     @Volatile
     private var screenReceiver: BroadcastReceiver? = null
@@ -125,6 +153,73 @@ object OverlayWatchdog {
         }.onFailure { Logx.swallow(TAG, "cancel", it) }
     }
 
+    /**
+     * 安排一次**立即重试**（默认 2 秒后）。
+     *
+     * 场景：服务刚被系统杀掉时通常马上就能拉回来，不必等 5 分钟的守护闹钟。
+     * 若 5 分钟重复闹钟被国产 ROM 冻结，这一层就是唯一还活着的恢复路径。
+     *
+     * 重试次数超过上限后不再重试，改为发保底通知交给用户 —— 避免无限重启。
+     */
+    fun scheduleImmediateRetry(context: Context, delayMs: Long = IMMEDIATE_RETRY_MS) {
+        if (retries.get() >= MAX_RETRIES) {
+            Logx.w(TAG, "重试已达上限（" + MAX_RETRIES + "），停止自动恢复，改发保底通知")
+            postRestoreNotification(context)
+            return
+        }
+        retries.incrementAndGet()
+        runCatching {
+            val app = context.applicationContext
+            val trigger = SystemClock.elapsedRealtime() + delayMs
+            scheduleAt(app, trigger, retryPendingIntent(app))
+            Logx.i(TAG, "已安排 " + delayMs + "ms 后的恢复重试（第 " + retries.get() + " 次）")
+        }.onFailure { Logx.swallow(TAG, "scheduleImmediateRetry", it) }
+    }
+
+    /**
+     * 逐级降级的闹钟设置。
+     *
+     * 精确闹钟（setExactAndAllowWhileIdle）在 Android 12+ 需要 SCHEDULE_EXACT_ALARM 权限，
+     * 拿不到会抛 SecurityException。本项目**不申请**该权限（它会打断用户去系统设置授权），
+     * 因此这里逐级降级：
+     *   精确 + 打盹可唤醒 → 非精确 + 打盹可唤醒 → 普通闹钟。
+     * 只要有一级成功，恢复链路就成立。
+     */
+    private fun scheduleAt(context: Context, triggerElapsed: Long, pi: PendingIntent) {
+        val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val exactOk = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                am.setExactAndAllowWhileIdle(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    triggerElapsed,
+                    pi,
+                )
+            } else {
+                am.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerElapsed, pi)
+            }
+            true
+        }.getOrElse { tr ->
+            Logx.w(TAG, "精确闹钟不可用（" + tr.javaClass.simpleName + "），降级为非精确", tr)
+            false
+        }
+        if (exactOk) return
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerElapsed, pi)
+            } else {
+                am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerElapsed, pi)
+            }
+        }.onFailure { Logx.swallow(TAG, "scheduleAt-fallback", it) }
+    }
+
+    private fun retryPendingIntent(context: Context): PendingIntent =
+        PendingIntent.getBroadcast(
+            context,
+            RC_RETRY,
+            Intent(context, OverlayWatchdogReceiver::class.java).setAction(ACTION_WATCHDOG),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
     private fun watchdogPendingIntent(context: Context): PendingIntent =
         PendingIntent.getBroadcast(
             context,
@@ -157,6 +252,77 @@ object OverlayWatchdog {
 
     private fun canDrawOverlays(context: Context): Boolean =
         runCatching { Settings.canDrawOverlays(context) }.getOrDefault(false)
+
+    /**
+     * 守护入口：恢复**并校验结果**，不合格就完整重建。
+     *
+     * ★ 为什么不能只 startService：
+     *   startForegroundService 成功 ≠ 悬浮窗恢复正常。
+     *   服务可能起来了却只挂上「空壳」（容器未就绪时的降级路径），
+     *   用户看到的就是一条没有内容的**白条**。
+     *   因此这里必须校验「容器已就绪 + 窗口已挂载」，不合格就重建整个服务实例。
+     *
+     * 只应在**后台线程**调用（内部有 Thread.sleep 轮询）。
+     *
+     * @return true 表示最终处于「已恢复」或「无需恢复」
+     */
+    fun restoreAndVerify(context: Context, reason: String): Boolean {
+        val prefs = ServiceLocator.appContainerOrNull?.appPreferences ?: return false
+        if (!prefs.masterSwitchEnabledBlocking()) return true // 用户没开启，无需恢复
+        if (OverlayService.isWindowAttached) {
+            resetRetries()
+            return true // 已经正常
+        }
+        if (!canDrawOverlays(context)) return false // 没权限，恢复了也画不出来
+
+        Logx.i(TAG, "守护触发恢复（原因：" + reason + "）")
+
+        // 第一次：常规启动
+        if (OverlayService.startAndReport(context) && awaitHealthy()) {
+            resetRetries()
+            return true
+        }
+
+        // 第二次：完整重建 —— 专门解决「服务起来了但只挂上壳」的状态
+        Logx.w(TAG, "首次恢复未达到健康状态，执行完整重建")
+        runCatching { OverlayService.rebuild(context) }
+            .onFailure { Logx.swallow(TAG, "rebuild", it) }
+        try {
+            Thread.sleep(REBUILD_SETTLE_MS)
+        } catch (ignored: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        if (OverlayService.startAndReport(context) && awaitHealthy()) {
+            resetRetries()
+            return true
+        }
+
+        Logx.w(TAG, "完整重建后仍未达到健康状态")
+        return false
+    }
+
+    /** 轮询等待「容器已就绪 + 窗口已挂载」。只应在线程外调用。 */
+    private fun awaitHealthy(): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + HEALTH_TIMEOUT_MS
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (ServiceLocator.isInitialized && OverlayService.isWindowAttached) {
+                Logx.i(TAG, "健康检查通过：容器已就绪且窗口已挂载")
+                return true
+            }
+            try {
+                Thread.sleep(HEALTH_POLL_MS)
+            } catch (ignored: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return false
+            }
+        }
+        Logx.w(
+            TAG,
+            "健康检查超时：容器=" + ServiceLocator.isInitialized +
+                " 窗口=" + OverlayService.isWindowAttached,
+        )
+        return false
+    }
 
     // ── 保底通知 ─────────────────────────────────────────────────
 

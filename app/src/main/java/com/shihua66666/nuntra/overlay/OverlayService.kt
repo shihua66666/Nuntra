@@ -27,7 +27,6 @@ import com.shihua66666.nuntra.R
 import com.shihua66666.nuntra.core.Logx
 import com.shihua66666.nuntra.core.NtToast
 import com.shihua66666.nuntra.core.ServiceLocator
-import com.shihua66666.nuntra.ui.overlay.StaticOverlayCapsule
 import com.shihua66666.nuntra.ui.theme.AppColors
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -73,6 +72,19 @@ class OverlayService : Service(), OverlayGestureCallbacks {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private lateinit var windowManager: WindowManager
+
+    /**
+     * 用户主动关闭总开关时为 true。
+     *
+     * onDestroy 里据此决定**是否安排自动恢复** ——
+     * 不加这个判断，用户关掉总开关后守护会把它又拉起来，变成「关不掉的幽灵」。
+     */
+    @Volatile
+    private var stoppingByUser = false
+
+    /** 正在执行「完整重建」：此时 onDestroy 不安排重试（重建流程自己会启动新实例）。 */
+    @Volatile
+    private var rebuilding = false
 
     private lateinit var composeHost: OverlayComposeHost
 
@@ -180,10 +192,21 @@ class OverlayService : Service(), OverlayGestureCallbacks {
 
         if (intent?.action == ACTION_STOP) {
             Logx.i(TAG, "收到停止指令")
-            // 用户明确关闭总开关：连同守护闹钟一起停掉，不再自动复活
+            // ★ 用户明确关闭总开关：标记后连同守护闹钟一起停掉，之后不再自动复活。
+            stoppingByUser = true
             runCatching { OverlayWatchdog.cancel(this) }
                 .onFailure { Logx.swallow(TAG, "cancelWatchdog", it) }
             // 先移除窗口再停止服务：保证「停止」与「不可见」同时发生。
+            detachOverlay()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        if (intent?.action == ACTION_REBUILD) {
+            // ★ 完整重建：把「只挂上壳」的旧实例彻底丢掉。
+            //   不标记 stoppingByUser（守护仍应继续），也不取消守护闹钟。
+            Logx.i(TAG, "收到重建指令：卸载窗口并结束本实例，等待全新启动")
+            rebuilding = true
             detachOverlay()
             stopSelf()
             return START_NOT_STICKY
@@ -219,6 +242,24 @@ class OverlayService : Service(), OverlayGestureCallbacks {
         Logx.i(TAG, "onDestroy")
         setWindowAttached(false)
         runCatching { gesture?.release() }
+
+        // ★★ 真正的自动恢复：onDestroy 是「服务被系统杀掉」最可靠的信号 ★★
+        //
+        //   为什么不只靠 onCreate 里那个 5 分钟重复闹钟：
+        //     国产 ROM（ColorOS / MIUI 等）会冻结 setInexactRepeating，
+        //     等 5 分钟往往等不到。这里在销毁瞬间安排一次 **2 秒后**的精确重试
+        //     （setExactAndAllowWhileIdle，打盹模式下也能唤醒；拿不到精确闹钟权限时
+        //      自动降级为非精确，见 OverlayWatchdog.scheduleAt）。
+        //
+        //   两种情况下不恢复：
+        //     · stoppingByUser —— 用户主动关了总开关；
+        //     · rebuilding      —— 本实例正是被「重建」流程结束掉的，
+        //                          重建方会自己启动新实例。
+        if (!stoppingByUser && !rebuilding) {
+            runCatching { OverlayWatchdog.scheduleImmediateRetry(this) }
+                .onFailure { Logx.swallow(TAG, "scheduleRetry-onDestroy", it) }
+        }
+
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -229,9 +270,17 @@ class OverlayService : Service(), OverlayGestureCallbacks {
         // ★ 四道闸门全部改成「有反馈」：任何一处拦住都要让用户知道是哪一个，
         //   否则表现就是「服务在运行但屏幕上什么都没有」，完全无从排查。
         if (!componentsReady) {
-            Logx.w(TAG, "组件未就绪，跳过挂载")
-            NtToast.show(this, "悬浮窗未挂载：组件未就绪")
-            return
+            // ★★ 白条的根治点 ★★
+            //
+            //   原实现在这里直接放弃，而内容层在容器为空时会渲染「静态空壳」——
+            //   用户看到的就是屏幕上那条没有数据驱动的白条。
+            //   现在改为：**先尝试补齐完整初始化**，补齐后再走正常挂载；
+            //   补齐不了就干脆不挂窗口（绝不挂空壳），并安排 2 秒后重试一次。
+            if (!tryReinit()) {
+                Logx.w(TAG, "容器仍未就绪：本次不挂载任何窗口（拒绝空壳），2 秒后重试")
+                scheduleInitRetry()
+                return
+            }
         }
         if (!shouldShow) {
             detachOverlay()
@@ -343,6 +392,35 @@ class OverlayService : Service(), OverlayGestureCallbacks {
     private fun canDrawOverlays(): Boolean = runCatching {
         Settings.canDrawOverlays(this)
     }.getOrDefault(false)
+
+    /**
+     * 尝试补齐组件初始化。
+     *
+     * @return true 表示 componentsReady 已为真，可以继续挂载窗口。
+     */
+    private fun tryReinit(): Boolean {
+        if (componentsReady) return true
+        if (!ServiceLocator.isInitialized) return false
+        return runCatching { initInternal(); componentsReady }.getOrElse { tr ->
+            Logx.swallow(TAG, "tryReinit", tr)
+            false
+        }
+    }
+
+    /**
+     * 2 秒后重试一次初始化与挂载。
+     *
+     * 冷启动时常出现「服务先起、容器后好」的竞态，等一小会儿即可补齐；
+     * 若届时仍未就绪就交给守护机制（OverlayWatchdog）。
+     */
+    private fun scheduleInitRetry() {
+        serviceScope.launch {
+            kotlinx.coroutines.delay(INIT_RETRY_MS)
+            if (!tryReinit()) return@launch
+            runCatching { syncOverlay(masterSwitchOn) }
+                .onFailure { Logx.swallow(TAG, "syncOverlay-retry", it) }
+        }
+    }
 
     /**
      * 等待依赖容器就绪。
@@ -672,8 +750,10 @@ class OverlayService : Service(), OverlayGestureCallbacks {
         //   因此这里统一走 appContainerOrNull；为 null 时渲染**不读任何数据源**的静态空壳。
         val container = ServiceLocator.appContainerOrNull
         if (container == null) {
-            Logx.w(TAG, "容器未就绪：悬浮窗降级为静态空壳")
-            StaticOverlayCapsule()
+            // ★ 绝不渲染「静态空壳」—— 那正是用户看到的白条。
+            //   syncOverlay 的闸门已保证「容器未就绪就不会挂载窗口」，
+            //   这里只作为最后一道防线：什么都不画。
+            Logx.w(TAG, "容器未就绪：不渲染任何内容（拒绝空壳）")
             return
         }
 
@@ -715,6 +795,9 @@ class OverlayService : Service(), OverlayGestureCallbacks {
             onSingleTap = { onSingleTap() },
             onDoubleTap = { onDoubleTap() },
             onLongPress = { onLongPress() },
+            // ★ 标签栏矩形 → 拦截器的「禁止拖动区」：
+            //   没有这条链路，横向滑动标签会被当成拖动窗口（真机问题）。
+            onFilterBarBounds = { rect -> touchInterceptor.noDragBounds = rect },
             // ★ 双指捏合缩放：直接交给窗口控制器（内部会 updateViewLayout + debounce 落盘）
             onResizeBy = { zoom ->
                 runCatching { windowController.resizeBy(zoom) }
@@ -758,6 +841,9 @@ class OverlayService : Service(), OverlayGestureCallbacks {
         /** 等待容器就绪的上限（ms）：超时则走静态空壳，绝不无限等待。 */
         private const val CONTAINER_WAIT_MS = 3000L
 
+        /** 组件初始化失败后的重试延时（ms）。 */
+        private const val INIT_RETRY_MS = 2_000L
+
         /**
          * 悬浮窗是否真的已挂载到 WindowManager。
          *
@@ -772,6 +858,9 @@ class OverlayService : Service(), OverlayGestureCallbacks {
         /** 供服务内部更新挂载状态。 */
         fun setWindowAttached(attached: Boolean) {
             isWindowAttached = attached
+            // 窗口挂上即认为恢复正常：重置守护的重试计数，
+            // 让它在下一次被清理时仍然有完整的重试预算。
+            if (attached) OverlayWatchdog.resetRetries()
         }
         private const val CHANNEL_OVERLAY = "nuntra_overlay"
         private const val CHANNEL_PRIORITY = "nuntra_priority"
@@ -782,6 +871,9 @@ class OverlayService : Service(), OverlayGestureCallbacks {
 
         const val ACTION_START = "com.shihua66666.nuntra.action.START_OVERLAY"
         const val ACTION_STOP = "com.shihua66666.nuntra.action.STOP_OVERLAY"
+
+        /** 请求「卸载并完整重建」：守护发现只挂上了空壳时使用。 */
+        const val ACTION_REBUILD = "com.shihua66666.nuntra.action.REBUILD_OVERLAY"
 
         /** 启动服务。未授权悬浮窗也允许调用：服务本身能跑，只是画不出窗口。 */
         fun start(context: Context) {
@@ -817,6 +909,20 @@ class OverlayService : Service(), OverlayGestureCallbacks {
         }.getOrElse { tr ->
             Logx.w(TAG, "startAndReport 被系统拒绝：" + tr.javaClass.simpleName, tr)
             false
+        }
+
+        /**
+         * 请求「完整重建」：让旧实例卸载并结束，由调用方随后重新启动。
+         *
+         * 用于守护发现「服务起来了但只挂上壳」时 —— 那种状态无法就地修复，
+         * 必须丢掉整个实例重新走一遍 onCreate → initInternal → syncOverlay。
+         */
+        fun rebuild(context: Context) {
+            runCatching {
+                context.startService(
+                    Intent(context, OverlayService::class.java).setAction(ACTION_REBUILD),
+                )
+            }.onFailure { Logx.swallow(TAG, "rebuild", it) }
         }
 
         fun stop(context: Context) {

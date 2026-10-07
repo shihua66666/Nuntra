@@ -44,6 +44,9 @@ fun OverlayRoot(
     onDoubleTap: () -> Unit = {},
     /** 长按：呼出快捷菜单。 */
     onLongPress: () -> Unit = {},
+    /** 上报标签栏矩形（窗口本地坐标），供触摸拦截器建立禁止拖动区。 */
+    onFilterBarBounds: (android.graphics.Rect?) -> Unit = {},
+
     /**
      * 双指捏合缩放回调。
      *
@@ -150,6 +153,8 @@ fun OverlayContent(
     onLongPress: () -> Unit = {},
     /** 双指捏合缩放（相对倍率）。 */
     onResizeBy: (Float) -> Unit = {},
+    /** 上报标签栏矩形，供触摸拦截器建立禁止拖动区。 */
+    onFilterBarBounds: (android.graphics.Rect?) -> Unit = {},
 ) {
     OverlayRoot(
         colors = colors,
@@ -160,6 +165,7 @@ fun OverlayContent(
         onDoubleTap = onDoubleTap,
         onLongPress = onLongPress,
         onResizeBy = onResizeBy,
+        onFilterBarBounds = onFilterBarBounds,
     ) {
         when (windowState) {
             OverlayWindowState.CAPSULE -> CollapsedCapsule(

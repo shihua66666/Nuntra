@@ -37,12 +37,43 @@ class OverlayTouchInterceptor @JvmOverloads constructor(
 
     var gesture: OverlayGestureDetector? = null
 
+    /**
+     * 「禁止拦截拖动」区域（**窗口本地坐标**）。
+     *
+     * ★★ 这是修「标签栏只能点、不能横向滑」的关键 ★★
+     *
+     *   顶部标签栏用 horizontalScroll 实现横向滚动，但本拦截器原来只要
+     *   |dx| 超过 touchSlop 就抢手势 —— 横向滑动必然超过阈值，
+     *   于是事件被抢走变成「拖动窗口」，标签栏永远滚不动。
+     *
+     *   现在由 Compose 侧（TagFilterBar 通过 onGloballyPositioned）把自己的
+     *   矩形登记到这里；手势**起点**落在该区域内时，本拦截器一律不抢，
+     *   事件完整交给 horizontalScroll。两个手势因此互斥：
+     *     · 起点在标签栏内 → 只滚动标签；
+     *     · 起点在别处     → 只拖动窗口。
+     *
+     *   坐标口径：用 ev.x / ev.y（相对本根 View，即窗口左上角），
+     *   与 Compose 的 boundsInRoot() 完全同一口径，不需要再换算屏幕坐标。
+     */
+    @Volatile
+    var noDragBounds: android.graphics.Rect? = null
+
+    /** 本轮手势的起点是否落在禁止拦截区（ACTION_DOWN 时确定，整轮沿用）。 */
+    private var downInNoDragRegion = false
+
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX = ev.rawX
                 downY = ev.rawY
                 dragging = false
+                // 用「按下点」判定，而不是每一帧的当前位置 ——
+                // 手势一旦从标签栏内开始，整轮都不该被抢走。
+                // 注意用 ev.x/ev.y（窗口本地坐标）与 noDragBounds 对齐。
+                downInNoDragRegion = noDragBounds?.contains(
+                    ev.x.toInt(),
+                    ev.y.toInt(),
+                ) == true
                 // ★ 调试：这条 Toast 证明「触摸事件真的到达了浮窗」。
                 //   若手指按下却看不到它，说明窗口本身不可触摸（flags/权限问题）；
                 //   看到了它却点不动，说明是手势层的问题。验证完成后置 DEBUG_TOUCH=false 即可。
@@ -57,6 +88,13 @@ class OverlayTouchInterceptor @JvmOverloads constructor(
                 //   必须完整交给 Compose 的 detectTransformGestures 处理。
                 //   若这里抢走，捏合就会变成「窗口跟着第一根手指乱跑」。
                 if (ev.pointerCount > 1) {
+                    dragging = false
+                    return false
+                }
+                // ★ 手势起点在标签栏（或其他登记为禁区的横向滚动区）内：
+                //   绝不抢 —— 让 horizontalScroll 完整消费这次滑动。
+                //   这就是「滑动标签」与「拖动窗口」互斥的实现点。
+                if (downInNoDragRegion) {
                     dragging = false
                     return false
                 }
@@ -81,6 +119,7 @@ class OverlayTouchInterceptor @JvmOverloads constructor(
                 // 未抢过手势时把 UP 交还子 View（Compose 需要它来完成点击）
                 val was = dragging
                 dragging = false
+                downInNoDragRegion = false
                 return was
             }
         }

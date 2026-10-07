@@ -3,6 +3,7 @@ package com.shihua66666.nuntra.overlay
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import com.shihua66666.nuntra.core.Logx
 
 /**
  * 悬浮窗守护的广播入口。
@@ -18,16 +19,32 @@ class OverlayWatchdogReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context?, intent: Intent?) {
         if (context == null) return
-        when (intent?.action) {
-            OverlayWatchdog.ACTION_WATCHDOG -> {
-                val ok = OverlayWatchdog.tryRestore(context, "定时守护（5 分钟）")
-                if (!ok) OverlayWatchdog.postRestoreNotification(context)
-            }
-
-            OverlayWatchdog.ACTION_RESTORE -> {
-                val ok = OverlayWatchdog.tryRestore(context, "用户点击恢复通知")
-                if (!ok) OverlayWatchdog.postRestoreNotification(context)
-            }
+        val action = intent?.action ?: return
+        if (action != OverlayWatchdog.ACTION_WATCHDOG && action != OverlayWatchdog.ACTION_RESTORE) {
+            return
         }
+
+        val app = context.applicationContext
+        val reason = if (action == OverlayWatchdog.ACTION_WATCHDOG) {
+            "定时守护（5 分钟）"
+        } else {
+            "用户点击恢复通知"
+        }
+
+        // ★ 这里必须用 goAsync()：
+        //   恢复流程要「启动服务 → 等它真的把窗口挂上 → 校验」，最多几秒，
+        //   直接在 onReceive 主线程里 sleep 会阻塞广播分发。
+        //   goAsync 允许我们把工作挪到后台线程，完成后再 finish()。
+        val pending = goAsync()
+        Thread {
+            try {
+                val ok = OverlayWatchdog.restoreAndVerify(app, reason)
+                if (!ok) OverlayWatchdog.postRestoreNotification(app)
+            } catch (tr: Throwable) {
+                Logx.swallow("OverlayWatchdogReceiver", "restoreAndVerify", tr)
+            } finally {
+                runCatching { pending.finish() }
+            }
+        }.start()
     }
 }

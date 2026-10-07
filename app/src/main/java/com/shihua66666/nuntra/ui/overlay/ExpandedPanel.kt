@@ -14,9 +14,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,6 +56,12 @@ fun ExpandedPanel(
     onCollapse: () -> Unit,
     /** 消息列表插槽：点击行为由插槽内部实现（标记已读 / 第 5 步跳转）。 */
     content: @Composable () -> Unit,
+    /**
+     * 上报标签栏的矩形（窗口本地坐标），供触摸拦截器建立「禁止拖动区」。
+     *
+     * 传 null 表示当前没有标签栏（隐藏或已销毁）——拦截器随即恢复全域拖动。
+     */
+    onFilterBarBounds: (android.graphics.Rect?) -> Unit = {},
 ) {
     val c = LocalAppColors.current
     val mono: FontFamily = LocalMonoFamily.current
@@ -88,12 +96,27 @@ fun ExpandedPanel(
         }
 
         // ── 筛选栏（可隐藏）──
+        //
+        //   ★ 必须把它的矩形登记给拦截器，否则横向滑动会被当成「拖动窗口」，
+        //     标签栏只能点、不能滑（这正是之前的真机问题）。
+        //   用 boundsInRoot()：它与拦截器里的 ev.x / ev.y 同为「窗口左上角」原点。
         if (filterVisible) {
             TagFilterBar(
                 tags = tags,
                 selectedTagIds = selectedTagIds,
                 onToggleTag = onToggleTag,
                 onSelectAll = onSelectAll,
+                modifier = Modifier.onGloballyPositioned { coords ->
+                    val r = coords.boundsInRoot()
+                    onFilterBarBounds(
+                        android.graphics.Rect(
+                            r.left.toInt(),
+                            r.top.toInt(),
+                            r.right.toInt(),
+                            r.bottom.toInt(),
+                        ),
+                    )
+                },
             )
         }
 
@@ -106,6 +129,13 @@ fun ExpandedPanel(
         ) {
             content()
         }
+
+            // 标签栏隐藏或本组件被销毁时，必须清掉禁区，
+            // 否则那块区域会永远「拖不动窗口」。
+            DisposableEffect(filterVisible) {
+                if (!filterVisible) onFilterBarBounds(null)
+                onDispose { onFilterBarBounds(null) }
+            }
 
             // ★ 为底部操作栏预留高度：底栏已移出 Column（见下方 Box 的 align），
             //   这里用等高的占位保证内容区不被底栏压住。

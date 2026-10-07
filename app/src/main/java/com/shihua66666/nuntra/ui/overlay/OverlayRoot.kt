@@ -3,6 +3,7 @@ package com.shihua66666.nuntra.ui.overlay
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,6 +44,12 @@ fun OverlayRoot(
     onDoubleTap: () -> Unit = {},
     /** 长按：呼出快捷菜单。 */
     onLongPress: () -> Unit = {},
+    /**
+     * 双指捏合缩放回调。
+     *
+     * 参数是**相对倍率**（本次事件相对上一次的变化量），调用方直接乘当前尺寸即可。
+     */
+    onResizeBy: (Float) -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     val c = LocalAppColors.current
@@ -79,13 +86,25 @@ fun OverlayRoot(
         }
     }
 
+    // ★ 双指捏合缩放：仅展开态生效（胶囊态只有一个圆点，缩放没有意义）。
+    //   与拖动的关系：OverlayTouchInterceptor 在 pointerCount > 1 时刻意不抢手势，
+    //   所以双指事件会完整到达这里。
+    val zoomGesture = Modifier.pointerInput(windowState) {
+        if (windowState != OverlayWindowState.CAPSULE) {
+            detectTransformGestures { _, _, zoom, _ ->
+                if (zoom != 1f) onResizeBy(zoom)
+            }
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .clip(shape)
             .background(c.panel.copy(alpha = PANEL_ALPHA))
             .border(1.dp, c.border, shape)
-            .then(tapGestures),
+            .then(tapGestures)
+            .then(zoomGesture),
         contentAlignment = Alignment.Center,
     ) {
         content()
@@ -129,6 +148,8 @@ fun OverlayContent(
     onDoubleTap: () -> Unit = {},
     /** 长按（快捷菜单）。 */
     onLongPress: () -> Unit = {},
+    /** 双指捏合缩放（相对倍率）。 */
+    onResizeBy: (Float) -> Unit = {},
 ) {
     OverlayRoot(
         colors = colors,
@@ -138,6 +159,7 @@ fun OverlayContent(
         onSingleTap = onSingleTap,
         onDoubleTap = onDoubleTap,
         onLongPress = onLongPress,
+        onResizeBy = onResizeBy,
     ) {
         when (windowState) {
             OverlayWindowState.CAPSULE -> CollapsedCapsule(

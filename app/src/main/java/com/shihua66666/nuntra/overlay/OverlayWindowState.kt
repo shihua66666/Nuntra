@@ -61,7 +61,10 @@ enum class OverlayWindowState {
                 )
 
                 PANEL -> {
-                    val widthDp = OverlayDimens.panelWidth.value.coerceAtMost(screenW * 0.92f)
+                    // ★ 默认宽度 = 屏幕宽度的 75%（需求指定）。
+                    //   原实现用固定 340dp，在小屏上可能贴边、在大屏上又显得小。
+                    //   用户捏合缩放后的尺寸由 miniOverride 之外的 panelOverride 覆盖（见控制器）。
+                    val widthDp = (screenW * PANEL_WIDTH_RATIO).coerceAtMost(screenW * 0.92f)
                     val heightDp = OverlayDimens.panelMaxHeight.value.coerceAtMost(screenH * 0.72f)
                     OverlaySizePx(dp(widthDp, density), dp(heightDp, density))
                 }
@@ -79,6 +82,9 @@ enum class OverlayWindowState {
                 }
             }
         }
+
+        /** 面板默认宽度占屏幕宽度的比例（需求：75%）。 */
+        const val PANEL_WIDTH_RATIO = 0.75f
 
         private fun dp(value: Float, density: Float): Int = (value * density).toInt().coerceAtLeast(1)
     }

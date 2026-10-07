@@ -3,6 +3,7 @@ package com.shihua66666.nuntra.notify
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationManagerCompat
+import com.shihua66666.nuntra.core.AlertPlayer
 import com.shihua66666.nuntra.core.Logx
 import com.shihua66666.nuntra.core.ServiceLocator
 import com.shihua66666.nuntra.monitor.ExtractedNotification
@@ -17,6 +18,8 @@ import com.shihua66666.nuntra.model.SourceApp
 import com.shihua66666.nuntra.model.TerminalMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -45,7 +48,14 @@ class NuntraNotificationListener : NotificationListenerService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    private val pendingIntents = PendingIntentResolver()
+    /**
+     * contentIntent 解析器：**改为与 OverlayService 共用同一实例**。
+     *
+     * 之前这里是私有实例，导致悬浮窗点击消息时查不到 PendingIntent，
+     * 只能标记已读而无法跳转。现在统一由 AppContainer 持有。
+     */
+    private val pendingIntents: PendingIntentResolver
+        get() = ServiceLocator.c.pendingIntents
 
     /** 运行期快照：由下面的 flow 收集协程持续刷新，避免每条通知都读 DataStore。 */
     @Volatile private var masterSwitchOn: Boolean = false
@@ -57,6 +67,22 @@ class NuntraNotificationListener : NotificationListenerService() {
     @Volatile private var watchedNames: List<String> = emptyList()
     @Volatile private var watchedConfiguredCount: Int = 0
 
+    // ── 提醒音与重复提醒的运行期快照（由 observeSettings 持续刷新）──
+    @Volatile private var alertEnabled: Boolean = true
+    @Volatile private var alertVolume: Float = 1f
+    @Volatile private var alertSound: String = AlertPlayer.SOUND_BUILTIN
+    @Volatile private var repeatEnabled: Boolean = true
+    @Volatile private var repeatIntervalMinutes: Int = 2
+    @Volatile private var repeatMaxTimes: Int = 3
+
+    /**
+     * 每条特殊关注消息的重复提醒任务。
+     *
+     * 用 ConcurrentHashMap 而不是普通 map：写入发生在通知回调线程，
+     * 清理发生在协程线程，必须线程安全。
+     */
+    private val reminderJobs = java.util.concurrent.ConcurrentHashMap<Long, Job>()
+
     override fun onCreate() {
         super.onCreate()
         Logx.i(TAG, "监听服务 onCreate")
@@ -67,6 +93,12 @@ class NuntraNotificationListener : NotificationListenerService() {
     }
 
     override fun onDestroy() {
+        // 重复提醒任务随服务一起结束（它们本来就是「监听服务在跑才提醒」的语义）
+        runCatching {
+            reminderJobs.values.forEach { it.cancel() }
+            reminderJobs.clear()
+        }
+        AlertPlayer.stop()
         Logx.i(TAG, "监听服务 onDestroy")
         serviceScope.cancel()
         pendingIntents.clear()
@@ -178,15 +210,62 @@ class NuntraNotificationListener : NotificationListenerService() {
 
                 pendingIntents.remember(sbn, dedupKey)
 
-                // ★ 第 8 步挂载点：提醒音与重复提醒在这里触发。
-                // 现在只记录，不播声音 —— 避免在第 1 步引入音频焦点与定时器复杂度。
+                // ★ 提醒音与重复提醒：入库成功后立即生效。
+                //
+                //   触发条件（三者同时满足）：
+                //     1. 所属标签勾选了「特殊关注」；
+                //     2. 该标签未被静音（priorityAlert 与 muted 在仓库层互斥，这里再确认一次）；
+                //     3. 全局提醒音开关为开。
+                //
+                //   之前这里只写日志、不播声音（第 1 步的占位），
+                //   导致「特殊关注」这个功能实际上完全没有效果。
+                val isMuted = ServiceLocator.c.tagResolver.isMutedTag(resolution.tagId)
                 Logx.i(
                     TAG,
                     "入库 " + source.displayName + " | " + extracted.title.orEmpty() +
                         " | 标签=" + resolution.tagId +
-                        (if (isPriority) " | 特殊关注" else ""),
+                        (if (isPriority) " | 特殊关注" else "") +
+                        (if (isMuted) " | 静音" else ""),
                 )
+                if (isPriority && !isMuted && alertEnabled) {
+                    AlertPlayer.play(this@NuntraNotificationListener, alertVolume, alertSound)
+                    scheduleRepeatReminder(message.id)
+                }
             }.onFailure { tr -> Logx.swallow(TAG, "handleAccepted", tr) }
+        }
+    }
+
+    /**
+     * 安排重复提醒。
+     *
+     * 规则（需求）：间隔默认 2 分钟，次数默认 3 次（最高 10 次，0 表示不限）。
+     *
+     * 每一跳之前都检查消息是否仍未读：用户点开看过就不再打扰 ——
+     * 这是任务结束的主要途径，不必依赖外部显式取消。
+     *
+     * 生命周期：任务挂在 serviceScope 上，监听服务被销毁时自动取消。
+     */
+    private fun scheduleRepeatReminder(messageId: Long) {
+        if (!repeatEnabled) return
+        val maxTimes = repeatMaxTimes
+        val intervalMs = repeatIntervalMinutes.coerceAtLeast(1) * 60_000L
+
+        reminderJobs.remove(messageId)?.cancel()
+        reminderJobs[messageId] = serviceScope.launch {
+            var sent = 0
+            while (isActive && (maxTimes <= 0 || sent < maxTimes)) {
+                delay(intervalMs)
+                if (!isActive) break
+                if (!alertEnabled) break
+                val stillUnread = ServiceLocator.appContainerOrNull
+                    ?.messageStore
+                    ?.isUnread(messageId) == true
+                if (!stillUnread) break
+                AlertPlayer.play(this@NuntraNotificationListener, alertVolume, alertSound)
+                ServiceLocator.appContainerOrNull?.messageStore?.bumpRepeat(messageId)
+                sent += 1
+            }
+            reminderJobs.remove(messageId)
         }
     }
 
@@ -232,6 +311,27 @@ class NuntraNotificationListener : NotificationListenerService() {
                 watchedConfiguredCount = contacts.size
                 watchedNames = contacts.filter { it.enabled }.map { it.name }
             }
+        }
+        // ── 提醒音与重复提醒的设置同步 ──────────────────────────
+        serviceScope.launch {
+            container.appPreferences.alertEnabled.collectLatest { v -> alertEnabled = v }
+        }
+        serviceScope.launch {
+            container.appPreferences.alertVolume.collectLatest { v -> alertVolume = v }
+        }
+        serviceScope.launch {
+            container.appPreferences.alertSound.collectLatest { v -> alertSound = v }
+        }
+        serviceScope.launch {
+            container.appPreferences.repeatEnabled.collectLatest { v -> repeatEnabled = v }
+        }
+        serviceScope.launch {
+            container.appPreferences.repeatIntervalMinutes.collectLatest { v ->
+                repeatIntervalMinutes = v
+            }
+        }
+        serviceScope.launch {
+            container.appPreferences.repeatMaxTimes.collectLatest { v -> repeatMaxTimes = v }
         }
     }
 

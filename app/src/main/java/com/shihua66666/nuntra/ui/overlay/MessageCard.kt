@@ -144,6 +144,27 @@ fun MessageCard(
                 }
             }
 
+            // ── 分类依据（把「为什么归到这个标签」直接写出来）──
+            //
+            //   修复背景：用户看到「消息全被分到工作」，第一反应是分类算错了。
+            //   实际上在「没有配置任何关注人」时，所有消息都会走兜底标签 ——
+            //   这是明确的设计行为。把它显示出来，用户立刻能看懂：
+            //     · 命中关注人 → 显示是哪个关注人决定的；
+            //     · 没命中     → 明确标注「兜底标签」，并提示去配置关注人。
+            when {
+                message.matchedContacts.isNotEmpty() -> Text(
+                    text = "关注人：" + message.matchedContacts.joinToString("、"),
+                    color = c.textSecondary,
+                    fontSize = 11.sp,
+                )
+
+                tag?.isDefault == true -> Text(
+                    text = "兜底标签：未命中任何关注人（可在设置里添加关注人）",
+                    color = c.textSecondary,
+                    fontSize = 11.sp,
+                )
+            }
+
             // ── 正文（关键词高亮）──
             if (message.body.isNotEmpty()) {
                 val annotated = remember(message.id, message.body, message.matchedKeywords, highlightColor) {

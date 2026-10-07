@@ -15,6 +15,13 @@ import androidx.compose.runtime.Composable
 sealed interface Screen {
     data object Home : Screen
     data object Settings : Screen
+
+    // ── 设置页下的三个配置子页面 ──
+    // 单独建目的地而不是「设置页内联展开」：标签管理本身的交互很重
+    // （拖拽、色板、对话框），内联会让设置页变得又长又难用。
+    data object TagManager : Screen
+    data object Contacts : Screen
+    data object Reminder : Screen
 }
 
 @Composable
@@ -24,9 +31,15 @@ fun NuntraNavHost(
     onBack: () -> Unit,
     settingsContent: @Composable () -> Unit,
     homeContent: @Composable () -> Unit,
+    tagManagerContent: @Composable () -> Unit = {},
+    contactsContent: @Composable () -> Unit = {},
+    reminderContent: @Composable () -> Unit = {},
 ) {
     when (current) {
         Screen.Home -> homeContent()
         Screen.Settings -> settingsContent()
+        Screen.TagManager -> tagManagerContent()
+        Screen.Contacts -> contactsContent()
+        Screen.Reminder -> reminderContent()
     }
 }

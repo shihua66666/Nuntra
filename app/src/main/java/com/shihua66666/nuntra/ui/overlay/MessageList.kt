@@ -52,17 +52,37 @@ fun MessageList(
     messages: List<TerminalMessage>,
     onMessageClick: (TerminalMessage) -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * 是否隐藏已读消息（对应设置页「点击后自动清理已读」，默认开）。
+     *
+     * ★ 为什么必须有这一层过滤：
+     *   点击消息会跳转并把该条标记已读，但已读项**仍然留在列表里**，
+     *   它会把新到的未读消息压在下面 —— 用户看到的现象就是
+     *   「点了跳转，消息还在，新消息也看不到」。
+     *   打开这个开关后，已读项在下一次重组时立即消失。
+     */
+    hideRead: Boolean = false,
     contentPadding: PaddingValues = PaddingValues(vertical = 4.dp),
 ) {
     val c = LocalAppColors.current
     val tagById = remember(tags) { tags.associateBy { it.id } }
-    val filtered = remember(messages, selectedTagIds) {
-        if (selectedTagIds.isEmpty()) messages
-        else messages.filter { it.tagId in selectedTagIds }
+    val filtered = remember(messages, selectedTagIds, hideRead) {
+        val byTag = if (selectedTagIds.isEmpty()) {
+            messages
+        } else {
+            messages.filter { it.tagId in selectedTagIds }
+        }
+        // 已读过滤放在标签过滤之后：两者是「先选范围、再按已读收敛」的关系。
+        if (hideRead) byTag.filter { !it.read } else byTag
     }
 
     if (filtered.isEmpty()) {
-        EmptyState(filteredByTag = selectedTagIds.isNotEmpty(), modifier = modifier)
+        EmptyState(
+            filteredByTag = selectedTagIds.isNotEmpty(),
+            // 有消息但被已读过滤清空时，空态文案要说清原因，否则用户以为消息丢了
+            hiddenByRead = hideRead && messages.any { it.read },
+            modifier = modifier,
+        )
         return
     }
 
@@ -110,9 +130,20 @@ private fun MessageCardRow(
     }
 }
 
-/** 空态：区分「真的没有消息」与「筛选后没有」，避免用户以为漏消息。 */
+/**
+ * 空态：区分三种「没有条目」的原因，避免用户以为漏消息。
+ *
+ *  1. 真的没有消息；
+ *  2. 标签筛选后为空；
+ *  3. **消息都在，但已读项被「点击后自动清理已读」隐藏了** ——
+ *     这一种最容易被误判成「消息丢了」，所以文案必须点明并给出关闭入口。
+ */
 @Composable
-private fun EmptyState(filteredByTag: Boolean, modifier: Modifier = Modifier) {
+private fun EmptyState(
+    filteredByTag: Boolean,
+    hiddenByRead: Boolean,
+    modifier: Modifier = Modifier,
+) {
     val c = LocalAppColors.current
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
@@ -120,24 +151,24 @@ private fun EmptyState(filteredByTag: Boolean, modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
-                text = if (filteredByTag) "该标签下暂无消息" else "暂无消息",
+                text = when {
+                    hiddenByRead -> "已读消息已自动隐藏"
+                    filteredByTag -> "该标签下暂无消息"
+                    else -> "暂无消息"
+                },
                 color = c.textSecondary,
                 fontSize = 13.sp,
             )
-            if (filteredByTag) {
-                Text(
-                    text = "试试底栏的「筛选」切换回全部",
-                    color = c.muted,
-                    fontSize = 11.sp,
-                )
-            } else {
-                Text(
-                    text = "开启总开关后，符合监控范围的通知会出现在这里",
-                    color = c.muted,
-                    fontSize = 11.sp,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-            }
+            Text(
+                text = when {
+                    hiddenByRead -> "可在「设置 → 点击行为」关闭「点击后自动清理已读」"
+                    filteredByTag -> "试试底栏的「筛选」切换回全部"
+                    else -> "开启总开关后，符合监控范围的通知会出现在这里"
+                },
+                color = c.muted,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
             Spacer(Modifier.height(4.dp))
         }
     }

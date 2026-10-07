@@ -39,6 +39,13 @@ class OverlayWindowController(
 
     private var miniSize: OverlaySizePx? = null
 
+    /**
+     * 展开面板的用户尺寸（捏合缩放后写入 DataStore，跨启动沿用）。
+     *
+     * 为 null 表示用户从未缩放过，此时用默认值（屏幕宽度 75%）。
+     */
+    private var panelSize: OverlaySizePx? = null
+
     /** 当前窗口尺寸（px）。 */
     private var windowWidth: Int = 0
     private var windowHeight: Int = 0
@@ -70,6 +77,10 @@ class OverlayWindowController(
             return true
         }
         currentState = state
+        // ★ 必须先读取用户保存的尺寸覆盖值，再计算尺寸 —— 顺序反了会得到默认尺寸。
+        //   注意 loadMiniSize 此前从未被调用过：小窗尺寸实际上从来没被恢复。
+        runCatching { positionStore.loadMiniSize() }.getOrNull()?.let { miniSize = it }
+        runCatching { positionStore.loadPanelSize() }.getOrNull()?.let { panelSize = it }
         val size = resolveSize(state)
         windowWidth = size.width
         windowHeight = size.height
@@ -177,6 +188,48 @@ class OverlayWindowController(
         runCatching { windowManager.updateViewLayout(view, layoutParams) }
             .onFailure { Logx.swallow(TAG, "updateViewLayout", it) }
 
+        schedulePersist()
+    }
+
+    /**
+     * 双指捏合缩放（面板态与小窗态）。
+     *
+     * @param zoom 本次事件的**相对倍率**：detectTransformGestures 给出的 zoom 是
+     *             「相对上一次事件」的变化量，因此直接乘当前尺寸即可，无需记录基准。
+     *
+     * 尺寸变化后必须重算位置边界：否则窗口会一半在屏幕外，看起来「缩没了」。
+     * 最后通过 updateViewLayout 立即生效，并 debounce 落盘（panel_width/panel_height）。
+     */
+    fun resizeBy(zoom: Float) {
+        if (!zoom.isFinite() || zoom <= 0f) return
+        val view = hostView ?: return
+        val layoutParams = params ?: return
+        // 胶囊态不缩放：只有一个圆点，缩放没有意义
+        if (currentState == OverlayWindowState.CAPSULE) return
+        if (windowWidth <= 0 || windowHeight <= 0) return
+
+        val maxW = (screenWidth() * MAX_W_RATIO).toInt().coerceAtLeast(MIN_RESIZE_PX)
+        val maxH = (screenHeight() * MAX_H_RATIO).toInt().coerceAtLeast(MIN_RESIZE_PX)
+        val newW = (windowWidth * zoom).toInt().coerceIn(MIN_RESIZE_PX, maxW)
+        val newH = (windowHeight * zoom).toInt().coerceIn(MIN_RESIZE_PX, maxH)
+        if (newW == windowWidth && newH == windowHeight) return
+
+        windowWidth = newW
+        windowHeight = newH
+        if (currentState == OverlayWindowState.MINI) {
+            miniSize = OverlaySizePx(newW, newH)
+        } else {
+            panelSize = OverlaySizePx(newW, newH)
+        }
+
+        layoutParams.width = newW
+        layoutParams.height = newH
+        val bounds = moveBounds()
+        layoutParams.x = layoutParams.x.coerceIn(bounds.left, bounds.right)
+        layoutParams.y = layoutParams.y.coerceIn(bounds.top, bounds.bottom)
+        runCatching { windowManager.updateViewLayout(view, layoutParams) }
+            .onFailure { Logx.swallow(TAG, "updateViewLayout-zoom", it) }
+        Logx.d(TAG, "捏合缩放 → " + newW + "x" + newH)
         schedulePersist()
     }
 
@@ -311,10 +364,23 @@ class OverlayWindowController(
         }
         // 非零兜底：WindowManager.addView 对 0 宽/0 高会抛异常，
         // 而屏幕极小或 configuration 尚未就绪时，dp 换算确实可能算出 0。
-        return OverlaySizePx(
+        val clamped = OverlaySizePx(
             width = raw.width.coerceAtLeast(MIN_DIMEN_PX),
             height = raw.height.coerceAtLeast(MIN_DIMEN_PX),
         )
+        // ★ 面板态优先使用用户捏合缩放后的尺寸（跨启动沿用）
+        if (state == OverlayWindowState.PANEL) {
+            val saved = panelSize
+            if (saved != null) {
+                val maxW = (screenWidth() * MAX_W_RATIO).toInt().coerceAtLeast(MIN_DIMEN_PX)
+                val maxH = (screenHeight() * MAX_H_RATIO).toInt().coerceAtLeast(MIN_DIMEN_PX)
+                return OverlaySizePx(
+                    saved.width.coerceIn(MIN_DIMEN_PX, maxW),
+                    saved.height.coerceIn(MIN_DIMEN_PX, maxH),
+                )
+            }
+        }
+        return clamped
     }
 
     private fun buildParams(
@@ -354,21 +420,18 @@ class OverlayWindowController(
         val screenH = screenHeight()
         return MoveBounds(
             left = MARGIN_PX,
-            top = MARGIN_PX + statusBarHeight(),
+            // ★ 上边界为 0：允许把悬浮窗拖到屏幕最顶部（需求明确要求）。
+            //   窗口带 FLAG_LAYOUT_NO_LIMITS，因此压住状态栏是允许的行为。
+            //   原实现是 MARGIN_PX + 状态栏高度，用户永远拖不到顶部。
+            top = 0,
             right = (screenW - windowWidth - MARGIN_PX).coerceAtLeast(MARGIN_PX),
-            bottom = (screenH - windowHeight - MARGIN_PX).coerceAtLeast(MARGIN_PX),
+            bottom = (screenH - windowHeight - MARGIN_PX).coerceAtLeast(0),
         )
     }
 
     private fun screenWidth(): Int = context.resources.displayMetrics.widthPixels
 
     private fun screenHeight(): Int = context.resources.displayMetrics.heightPixels
-
-    /** 状态栏高度：让悬浮窗不要压在状态栏下面。取不到时返回 0，不崩。 */
-    private fun statusBarHeight(): Int = runCatching {
-        val id = context.resources.getIdentifier("status_bar_height", "dimen", "android")
-        if (id > 0) context.resources.getDimensionPixelSize(id) else 0
-    }.getOrDefault(0)
 
     private fun schedulePersist(delayMs: Long = PERSIST_DEBOUNCE_MS) {
         persistJob?.cancel()
@@ -381,6 +444,9 @@ class OverlayWindowController(
     private suspend fun persistNow() {
         val layoutParams = params ?: return
         positionStore.save(layoutParams.x, layoutParams.y)
+        // ★ 尺寸也要落盘：否则「这次缩好的大小」重启后丢失，用户会以为设置没生效
+        panelSize?.let { positionStore.savePanelSize(it) }
+        miniSize?.let { positionStore.saveMiniSize(it) }
     }
 
     /** 释放全部资源。服务销毁时调用。 */
@@ -395,6 +461,13 @@ class OverlayWindowController(
 
         /** 屏幕边缘留白（px）。 */
         const val MARGIN_PX = 12
+
+        /** 缩放下限（px）：再小就看不清内容了。 */
+        private const val MIN_RESIZE_PX = 200
+
+        /** 缩放上限：相对屏幕宽/高的最大比例，避免窗口大到拖不动。 */
+        private const val MAX_W_RATIO = 0.96f
+        private const val MAX_H_RATIO = 0.88f
 
         /** 吸附动画步数与步长：约 160ms 完成，短促不拖沓。 */
         private const val SNAP_STEPS = 8

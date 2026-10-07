@@ -31,9 +31,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.layout.width
 import com.shihua66666.nuntra.core.CrashRecorder
+import com.shihua66666.nuntra.data.MessageStore
 import com.shihua66666.nuntra.core.NtToast
 import com.shihua66666.nuntra.perm.PermissionNavigator
 import com.shihua66666.nuntra.ui.SafeCrashReportScreen
@@ -47,6 +49,7 @@ import com.shihua66666.nuntra.ui.components.NtSwitchRow
 import com.shihua66666.nuntra.ui.components.SectionHeader
 import com.shihua66666.nuntra.ui.theme.AppColors
 import com.shihua66666.nuntra.ui.theme.LocalAppColors
+import kotlin.math.roundToInt
 
 /**
  * 设置页骨架（第 0 步版本）。
@@ -80,10 +83,25 @@ fun SettingsScreen(
     onResetSmsKeywords: () -> Unit = {},
     resolvedSmsPackages: Set<String> = emptySet(),
     smsNeedsManualSelection: Boolean = false,
+    /** 消息条数上限（读自 AppPreferences.messageLimit）。 */
+    messageLimit: Int = MessageStore.DEFAULT_LIMIT,
+    onChangeMessageLimit: (Int) -> Unit = {},
+    /** 保留时长（小时）。 */
+    retentionHours: Int = MessageStore.DEFAULT_RETENTION_HOURS,
+    onChangeRetentionHours: (Int) -> Unit = {},
+    /** 点击消息跳转后是否隐藏已读项（设置页开关，默认开）。 */
+    clearReadOnTap: Boolean = true,
+    onChangeClearReadOnTap: (Boolean) -> Unit = {},
     /** 每次回前台自增：驱动权限状态重新读取（用户去设置里授权后切回来要立刻生效）。 */
     resumeTick: Int = 0,
     /** 手动重新检测权限（设置页的「重新检测」按钮）。 */
     onRefreshReadiness: () -> Unit = {},
+    /** 打开「标签管理」子页面。 */
+    onOpenTagManager: () -> Unit = {},
+    /** 打开「关注人与关键词」子页面。 */
+    onOpenContacts: () -> Unit = {},
+    /** 打开「提醒音与重复提醒」子页面。 */
+    onOpenReminder: () -> Unit = {},
 ) {
     val c = LocalAppColors.current
     Scaffold(containerColor = c.background) { inner ->
@@ -122,17 +140,22 @@ fun SettingsScreen(
                 onSelect = onSelectTheme,
             )
 
-            PlaceholderSection(
+            // ★ 三个真正可点击的入口 —— 之前这里是 PlaceholderSection（纯文案），
+            //   点不动，导致用户根本无法配置标签与关注人，标签分类形同虚设。
+            NtNavRow(
                 title = "标签管理",
-                note = "新增 / 重命名 / 改色 / 拖拽排序 / 删除迁移，以及每个标签的特殊关注与静音开关。",
+                subtitle = "新增 / 重命名 / 改色 / 拖拽排序 / 删除迁移，以及每个标签的特殊关注与静音开关。",
+                onClick = onOpenTagManager,
             )
-            PlaceholderSection(
+            NtNavRow(
                 title = "关注人与关键词",
-                note = "关注人绑定标签；关键词命中无对应关注人时归入兜底标签。",
+                subtitle = "关注人绑定标签；未命中任何关注人时归入兜底标签。",
+                onClick = onOpenContacts,
             )
-            PlaceholderSection(
+            NtNavRow(
                 title = "提醒音与重复提醒",
-                note = "特殊关注标签提醒音试听/更换；重复提醒间隔与次数。",
+                subtitle = "提醒音试听/更换；重复提醒间隔与次数。",
+                onClick = onOpenReminder,
             )
             SmsSection(
                 enabled = smsMonitoringEnabled,
@@ -144,9 +167,18 @@ fun SettingsScreen(
                 resolvedPackages = resolvedSmsPackages,
                 needsManualSelection = smsNeedsManualSelection,
             )
-            PlaceholderSection(
-                title = "消息上限与保留",
-                note = "默认保留最近 24 小时，条数上限默认 200，可调。",
+            MessageLimitSection(
+                limit = messageLimit,
+                onChangeLimit = onChangeMessageLimit,
+                retentionHours = retentionHours,
+                onChangeRetention = onChangeRetentionHours,
+            )
+
+            // ★ 新增：点击行为。与「消息上限与保留」分开成独立分区，
+            //   因为一个是存储策略、一个是交互策略，混在一起语义不清。
+            ClickBehaviorSection(
+                clearReadOnTap = clearReadOnTap,
+                onChange = onChangeClearReadOnTap,
             )
 
             CrashDiagnosticsSection()
@@ -161,6 +193,150 @@ fun SettingsScreen(
         }
     }
 }
+
+/**
+ * 消息上限与保留策略 —— **真正可操作的控件**。
+ *
+ * 修复背景：这里原本只是一个 PlaceholderSection（纯文本说明），
+ * 写着「条数上限默认 200，可调」却没有任何可调入口，属于「界面在骗人」。
+ *
+ * 交互设计：
+ *  · 预设档位 50 / 100 / 200 / 500 —— 上限有明确的舒适区，预设让常用值一键可达；
+ *  · 滑杆用于取预设之间的任意值，范围与 MessageStore 的合法区间一致；
+ *  · 滑杆**只在松手时**写入 DataStore（onValueChangeFinished），
+ *    否则拖动过程中每一帧都会写盘。
+ *
+ * 生效链路：写入 AppPreferences → AppContainer 中的收集器调用 MessageStore.setLimit()
+ *        → 内部立即执行 trimByCountLocked()，因此超出的旧消息会被当场清理。
+ */
+@Composable
+private fun MessageLimitSection(
+    limit: Int,
+    onChangeLimit: (Int) -> Unit,
+    retentionHours: Int,
+    onChangeRetention: (Int) -> Unit,
+) {
+    val c = LocalAppColors.current
+    NtPanel(modifier = Modifier.fillMaxWidth()) {
+        SectionHeader(title = "消息上限与保留")
+        Spacer(Modifier.height(8.dp))
+        NtCaption(
+            text = "当前：保留最近 " + retentionLabel(retentionHours) +
+                "，最多 " + limit + " 条。超出部分会被立即清理。",
+        )
+
+        Spacer(Modifier.height(14.dp))
+        Text(text = "条数上限", color = c.textPrimary, fontSize = 14.sp)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            LIMIT_PRESETS.forEach { preset ->
+                NtButton(
+                    text = preset.toString(),
+                    // 选中档位用强调色描边，未选中用普通边框 —— 一眼看出当前值
+                    accent = limit == preset,
+                    onClick = { onChangeLimit(preset) },
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        // 本地状态：拖动时只改本地值，松手才写盘
+        var sliderValue by remember(limit) { mutableStateOf(limit.toFloat()) }
+        Slider(
+            value = sliderValue,
+            onValueChange = { v -> sliderValue = v },
+            valueRange = MessageStore.MIN_LIMIT.toFloat()..MessageStore.MAX_LIMIT.toFloat(),
+            onValueChangeFinished = { onChangeLimit(sliderValue.roundToInt()) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        NtCaption(
+            text = "可调范围 " + MessageStore.MIN_LIMIT + " ~ " + MessageStore.MAX_LIMIT + " 条，松手即生效",
+        )
+
+        Spacer(Modifier.height(14.dp))
+        NtDivider()
+        Spacer(Modifier.height(14.dp))
+        Text(text = "保留时长", color = c.textPrimary, fontSize = 14.sp)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            RETENTION_PRESETS.forEach { hours ->
+                NtButton(
+                    text = retentionLabel(hours),
+                    accent = retentionHours == hours,
+                    onClick = { onChangeRetention(hours) },
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        NtCaption(
+            text = "只保留这段时间内的消息，更早的会被自动清理；配置数据不受影响。",
+        )
+    }
+}
+
+/**
+ * 点击行为分区。
+ *
+ * 目前只有一项，但它决定了一个关键体感：点击消息跳转后，
+ * 已读项是否立即从悬浮窗列表消失。关掉它则保留全部消息供回看。
+ */
+@Composable
+private fun ClickBehaviorSection(
+    clearReadOnTap: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    NtPanel(modifier = Modifier.fillMaxWidth()) {
+        SectionHeader(title = "点击行为")
+        Spacer(Modifier.height(6.dp))
+        NtSwitchRow(
+            title = "点击后自动清理已读",
+            subtitle = "点击消息跳转后，该条立即从悬浮窗列表消失，避免已读消息压住新消息",
+            checked = clearReadOnTap,
+            onCheckedChange = onChange,
+        )
+    }
+}
+
+/**
+ * 可点击的导航行：设置项 → 子页面。
+ *
+ * 为什么必须有它：这三个区块之前用的是 PlaceholderSection（纯文本、无点击），
+ * 用户点上去毫无反应 —— 这是「设置页交互死锁」的直接原因。
+ */
+@Composable
+private fun NtNavRow(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    val c = LocalAppColors.current
+    NtPanel(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = title, color = c.textPrimary, fontSize = 14.sp)
+                NtCaption(text = subtitle)
+            }
+            // 右侧箭头：让「可点击」这件事在视觉上明确
+            Text(text = "›", color = c.textSecondary, fontSize = 20.sp)
+        }
+    }
+}
+
+/** 条数上限预设档位。 */
+private val LIMIT_PRESETS = listOf(50, 100, 200, 500)
+
+/** 保留时长预设档位（小时）：24 小时 / 3 天 / 7 天。 */
+private val RETENTION_PRESETS = listOf(24, 72, 168)
+
+/** 时长的人话描述，例如 72 → 「3 天」。 */
+private fun retentionLabel(hours: Int): String =
+    if (hours >= 24 && hours % 24 == 0) (hours / 24).toString() + " 天" else hours.toString() + " 小时"
 
 /**
  * 尚未实现的区块占位（第 6 步起逐个替换为真实内容）。

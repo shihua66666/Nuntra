@@ -51,6 +51,41 @@ class AppPreferences(private val context: Context) {
         it[KEY_RETENTION_HOURS] = value.coerceIn(MessageStore.MIN_RETENTION_HOURS, MessageStore.MAX_RETENTION_HOURS)
     }
 
+    // ── 面板尺寸（捏合缩放后持久化，px）──────────────────────────
+    /**
+     * 展开面板宽度（px）；未设置过返回 null，由调用方用默认值（屏幕宽 75%）。
+     *
+     * 与小窗尺寸（[overlaySize]）分开存：两者是不同形态的独立偏好，
+     * 共用一个键会出现「缩放面板把小窗也改了」的串扰。
+     */
+    val panelWidth: Flow<Int?> = store.data.map { prefs ->
+        val w = prefs[KEY_PANEL_W] ?: return@map null
+        if (w <= 0) null else w
+    }
+
+    val panelHeight: Flow<Int?> = store.data.map { prefs ->
+        val h = prefs[KEY_PANEL_H] ?: return@map null
+        if (h <= 0) null else h
+    }
+
+    suspend fun setPanelSize(width: Int, height: Int) = store.edit {
+        it[KEY_PANEL_W] = width
+        it[KEY_PANEL_H] = height
+    }
+
+    // ── 点击行为 ─────────────────────────────────────────────────
+    /**
+     * 点击消息跳转后是否自动清理（隐藏）已读消息。**默认开启。**
+     *
+     * 为什么默认开：点击跳转会把该条标记已读，但它仍留在列表里，
+     * 已读项会把新到的未读消息压在下面，用户得滚动才能看到新消息 ——
+     * 这是「点了跳转却感觉消息没变化」的直接原因。
+     * 关掉它则保留全部消息（含已读），供需要回看的用户使用。
+     */
+    val clearReadOnTap: Flow<Boolean> = store.data.map { it[KEY_CLEAR_READ_ON_TAP] ?: true }
+
+    suspend fun setClearReadOnTap(value: Boolean) = store.edit { it[KEY_CLEAR_READ_ON_TAP] = value }
+
     // ── 提醒音 ───────────────────────────────────────────────────
     val alertEnabled: Flow<Boolean> = store.data.map { it[KEY_ALERT_ENABLED] ?: true }
 
@@ -60,6 +95,17 @@ class AppPreferences(private val context: Context) {
     val alertVolume: Flow<Float> = store.data.map { (it[KEY_ALERT_VOLUME] ?: 1.0f).coerceIn(0f, 1f) }
 
     suspend fun setAlertVolume(value: Float) = store.edit { it[KEY_ALERT_VOLUME] = value.coerceIn(0f, 1f) }
+
+    /**
+     * 提醒音音源：builtin（内置 alert_priority / alert_fallback）或 system（系统默认通知音）。
+     *
+     * 存字符串而不是资源 id：资源 id 会随构建变化，存下来必然失效。
+     */
+    val alertSound: Flow<String> = store.data.map {
+        it[KEY_ALERT_SOUND] ?: com.shihua66666.nuntra.core.AlertPlayer.SOUND_BUILTIN
+    }
+
+    suspend fun setAlertSound(value: String) = store.edit { it[KEY_ALERT_SOUND] = value }
 
     // ── 重复提醒 ─────────────────────────────────────────────────
     val repeatEnabled: Flow<Boolean> = store.data.map { it[KEY_REPEAT_ENABLED] ?: true }
@@ -220,12 +266,16 @@ class AppPreferences(private val context: Context) {
         private val KEY_RETENTION_HOURS = intPreferencesKey("retention_hours")
         private val KEY_ALERT_ENABLED = booleanPreferencesKey("alert_enabled")
         private val KEY_ALERT_VOLUME = floatPreferencesKey("alert_volume")
+        private val KEY_ALERT_SOUND = stringPreferencesKey("alert_sound")
+        private val KEY_CLEAR_READ_ON_TAP = booleanPreferencesKey("clear_read_on_tap")
         private val KEY_REPEAT_ENABLED = booleanPreferencesKey("repeat_enabled")
         private val KEY_REPEAT_INTERVAL = intPreferencesKey("repeat_interval_minutes")
         private val KEY_REPEAT_MAX = intPreferencesKey("repeat_max_times")
         private val KEY_OVERLAY_X = intPreferencesKey("overlay_x")
         private val KEY_OVERLAY_Y = intPreferencesKey("overlay_y")
         private val KEY_OVERLAY_W = intPreferencesKey("overlay_width")
+        private val KEY_PANEL_W = intPreferencesKey("panel_width")
+        private val KEY_PANEL_H = intPreferencesKey("panel_height")
         private val KEY_OVERLAY_H = intPreferencesKey("overlay_height")
         private val KEY_MASTER_SWITCH = booleanPreferencesKey("master_switch_enabled")
         private val KEY_OVERLAY_CRASH = booleanPreferencesKey("overlay_crash_flag")

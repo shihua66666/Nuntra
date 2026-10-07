@@ -137,6 +137,14 @@ class MessageStore(
         }
     }
 
+    /**
+     * 指定消息是否仍未读。
+     *
+     * 重复提醒的每一跳都要查一次：用户已经点开看过了就不该继续打扰。
+     * 直接查 unread 集合（O(1)），不必遍历消息列表。
+     */
+    fun isUnread(id: Long): Boolean = synchronized(lock) { id in unread }
+
     /** 记录一次重复提醒。 */
     fun bumpRepeat(id: Long) {
         synchronized(lock) {

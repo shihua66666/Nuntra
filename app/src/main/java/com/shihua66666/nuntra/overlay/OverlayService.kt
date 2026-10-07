@@ -459,14 +459,94 @@ class OverlayService : Service(), OverlayGestureCallbacks {
     }
 
     /** 打开设置页（底栏「设置」按钮）：从悬浮窗直接跳到主界面。 */
+    /**
+     * 从悬浮窗打开主界面，并**直达设置页**。
+     *
+     * 两个关键点：
+     *  1. `FLAG_ACTIVITY_NEW_TASK` —— 悬浮窗是系统独立窗口，没有 Activity 栈可依托，
+     *     不加这个标志会抛 AndroidRuntimeException（Calling startActivity() from outside
+     *     of an Activity context requires the FLAG_ACTIVITY_NEW_TASK flag）。
+     *  2. `extra_screen = "settings"` —— 只把界面拉起来是不够的：主界面默认停在首页，
+     *     用户点的是「设置」，就必须落到设置页。参数由 MainActivity 读取。
+     *
+     * 注意 CLEAR_TOP：主界面已在栈中时不会新建实例，而是触发 onNewIntent，
+     * 因此 MainActivity **必须同时处理 onNewIntent**，否则第二次点击不会跳转。
+     */
     private fun openApp() {
         runCatching {
             startActivity(
                 Intent(this, MainActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    // ★ 告诉主界面直接打开设置页
+                    putExtra(MainActivity.EXTRA_SCREEN, MainActivity.SCREEN_SETTINGS)
                 },
             )
-        }.onFailure { Logx.swallow(TAG, "openApp", it) }
+        }.onFailure {
+            Logx.swallow(TAG, "openApp", it)
+            NtToast.show(this, "打开主界面失败：请手动点开 App")
+        }
+    }
+
+    /**
+     * 点击消息卡片 → 跳回来源 App 的对应聊天界面，并标记已读。
+     *
+     * 三级策略（逐级降级，绝不「点了没反应」）：
+     *   1. **contentIntent**：通知自带的 PendingIntent，直达具体会话，最精确；
+     *      PendingIntent.send() 不受 Android 10+ 后台启动 Activity 限制，
+     *      因为它继承目标 App 的特权 —— 这是唯一可靠的一级。
+     *   2. **getLaunchIntentForPackage**：拿不到 contentIntent 时拉起来源 App 首页；
+     *      这一级在 Android 14+ 可能被后台启动限制拦截，因此必须兜底提示。
+     *   3. 两级都失败 → Toast 说明原因，而不是静默。
+     *
+     * 已读处理放在最前面：用户点开就说明已经看过了，无论跳转成功与否。
+     */
+    private fun openSourceChat(message: com.shihua66666.nuntra.model.TerminalMessage) {
+        // ① 标记已读并刷新未读计数（markRead 内部会 publishLocked，驱动 UI 更新）
+        runCatching { ServiceLocator.c.messageStore.markRead(message.id) }
+            .onFailure { Logx.swallow(TAG, "markRead", it) }
+
+        // ② 首选 contentIntent（按 dedupKey 查，与写入时是同一个键）
+        val pending = runCatching {
+            ServiceLocator.c.pendingIntents.find(
+                dedupKey = message.dedupKey,
+                packageName = message.packageName,
+                notificationId = 0,
+                postTime = message.postedAt,
+            )
+        }.getOrNull()
+
+        if (pending != null) {
+            val sent = runCatching {
+                pending.send()
+                true
+            }.getOrElse { tr ->
+                Logx.swallow(TAG, "contentIntent.send", tr)
+                false
+            }
+            if (sent) return
+        }
+
+        // ③ 兜底：拉起来源 App 首页
+        val launched = runCatching {
+            val intent = packageManager.getLaunchIntentForPackage(message.packageName)
+            if (intent == null) {
+                false
+            } else {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+                true
+            }
+        }.getOrElse { tr ->
+            Logx.swallow(TAG, "launchIntent", tr)
+            false
+        }
+
+        if (!launched) {
+            NtToast.show(
+                this,
+                "无法跳转：" + message.source.displayName + "（系统限制了后台启动，请手动打开）",
+            )
+        }
     }
 
     // ── 前台通知 ─────────────────────────────────────────────────
@@ -578,6 +658,9 @@ class OverlayService : Service(), OverlayGestureCallbacks {
         }
 
         val colors = container.themeController.colors.collectAsState().value
+        // 「点击后自动清理已读」：开启时列表隐藏已读项。
+        // 默认 true —— 点击跳转后该条立即消失，新消息不会被压在下面。
+        val clearReadOnTap by container.appPreferences.clearReadOnTap.collectAsState(initial = true)
         val tags by container.tagRepository.tags.collectAsState()
         val messages by container.messageStore.sorted.collectAsState()
         val state = uiState
@@ -612,15 +695,22 @@ class OverlayService : Service(), OverlayGestureCallbacks {
             onSingleTap = { onSingleTap() },
             onDoubleTap = { onDoubleTap() },
             onLongPress = { onLongPress() },
+            // ★ 双指捏合缩放：直接交给窗口控制器（内部会 updateViewLayout + debounce 落盘）
+            onResizeBy = { zoom ->
+                runCatching { windowController.resizeBy(zoom) }
+                    .onFailure { Logx.swallow(TAG, "resizeBy", it) }
+            },
             messageList = {
                 MessageList(
                     tags = tags,
                     selectedTagIds = state.selectedTagIds,
                     messages = messages,
+                    // ★ 已读项是否隐藏：由设置页的「点击后自动清理已读」决定
+                    hideRead = clearReadOnTap,
                     // 展开面板时已整体标记过已读；这里覆盖「展开后新到」的消息。
                     // 第 5 步会在此基础上加 contentIntent.send() 跳转原 App。
                     onMessageClick = { message ->
-                        runCatching { container.messageStore.markRead(message.id) }
+                        openSourceChat(message)
                     },
                 )
             },

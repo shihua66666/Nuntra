@@ -7,12 +7,14 @@ import com.shihua66666.nuntra.data.AppPreferences
 import com.shihua66666.nuntra.data.MessageStore
 import com.shihua66666.nuntra.data.SettingsRepository
 import com.shihua66666.nuntra.data.TagRepository
+import com.shihua66666.nuntra.monitor.PendingIntentResolver
 import com.shihua66666.nuntra.notify.TagResolver
 import com.shihua66666.nuntra.ui.theme.ThemeController
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 /**
@@ -123,7 +125,23 @@ class AppContainer(private val app: Context) {
 
     val messageStore: MessageStore by lazy {
         // 排序依赖标签优先级，这里注入一次；lambda 是惰性的，不会造成初始化循环
-        MessageStore(tagPriorityOf = { tagId -> tagRepository.priorityOf(tagId) })
+        MessageStore(tagPriorityOf = { tagId -> tagRepository.priorityOf(tagId) }).also { store ->
+            // ★★ 把持久化的「条数上限 / 保留时长」接到内存存储上，并持续监听变化 ★★
+            //
+            //   修复前：MessageStore.setLimit() **全项目零调用点**。
+            //   结果是偏好里无论存了什么，内存中永远使用默认上限 200，
+            //   用户把上限改成 100 也不会清理任何旧消息 —— 设置形同虚设。
+            //
+            //   这里在 store 创建后立刻开始收集；setLimit / setRetentionHours 内部
+            //   会同步执行一次裁剪（trimByCountLocked / trimByAgeLocked），
+            //   因此「上限 200 → 100 时超出部分立刻被清掉」是自动满足的。
+            ServiceLocator.appScope.launch {
+                appPreferences.messageLimit.collect { limit -> store.setLimit(limit) }
+            }
+            ServiceLocator.appScope.launch {
+                appPreferences.retentionHours.collect { hours -> store.setRetentionHours(hours) }
+            }
+        }
     }
 
     val tagRepository: TagRepository by lazy { TagRepository(app) }
@@ -131,6 +149,17 @@ class AppContainer(private val app: Context) {
     val settingsRepository: SettingsRepository by lazy { SettingsRepository(app, appPreferences) }
 
     val appPreferences: AppPreferences by lazy { AppPreferences(app) }
+
+    /**
+     * contentIntent 解析器（**全进程共享**）。
+     *
+     * 为什么必须共享：
+     *   写入方是 NuntraNotificationListener（收到通知时 remember），
+     *   读取方是 OverlayService（点击消息卡片时 find）。
+     *   之前它只是监听器的私有字段，两个类各持一份内存索引，
+     *   悬浮窗永远查不到 PendingIntent —— 消息点击只能标记已读、无法跳转。
+     */
+    val pendingIntents: PendingIntentResolver by lazy { PendingIntentResolver() }
 
     val tagResolver: TagResolver by lazy {
         TagResolver(tagRepository = tagRepository, settingsRepository = settingsRepository)

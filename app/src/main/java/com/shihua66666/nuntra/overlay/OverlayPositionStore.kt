@@ -69,6 +69,23 @@ class OverlayPositionStore(private val preferences: AppPreferences) {
         }.getOrElse { null }
     }
 
+    /** 读取已保存的面板尺寸；没有则返回 null（调用方用默认值）。 */
+    suspend fun loadPanelSize(): OverlaySizePx? = withContext(Dispatchers.IO) {
+        runCatching {
+            val w = preferences.panelWidth.firstOrNull()
+            val h = preferences.panelHeight.firstOrNull()
+            if (w == null || h == null || w <= 0 || h <= 0) null else OverlaySizePx(w, h)
+        }.getOrElse { null }
+    }
+
+    /** 保存面板尺寸（捏合缩放后调用）。 */
+    suspend fun savePanelSize(size: OverlaySizePx) {
+        withContext(Dispatchers.IO) {
+            runCatching { preferences.setPanelSize(size.width, size.height) }
+                .onFailure { Logx.swallow(TAG, "savePanelSize", it) }
+        }
+    }
+
     suspend fun saveMiniSize(size: OverlaySizePx) {
         withContext(Dispatchers.IO) {
             runCatching { preferences.setOverlaySize(size.width, size.height) }
@@ -97,8 +114,12 @@ class OverlayPositionStore(private val preferences: AppPreferences) {
             windowH: Int,
         ): Pair<Int, Int> {
             val maxX = (screenW - windowW - MARGIN_PX).coerceAtLeast(MARGIN_PX)
-            val maxY = (screenH - windowH - MARGIN_PX).coerceAtLeast(MARGIN_PX)
-            return x.coerceIn(MARGIN_PX, maxX) to y.coerceIn(MARGIN_PX, maxY)
+            val maxY = (screenH - windowH - MARGIN_PX).coerceAtLeast(0)
+            // ★ Y 的下界是 0（而不是 MARGIN_PX）：允许把窗口拖到屏幕最顶部。
+            //   窗口带 FLAG_LAYOUT_NO_LIMITS，因此压住状态栏是允许的 ——
+            //   需求明确要求「Y 坐标可以接近或等于 0」，之前的 +MARGIN_PX + 状态栏高度
+            //   让用户永远拖不到顶部。
+            return x.coerceIn(MARGIN_PX, maxX) to y.coerceIn(0, maxY)
         }
     }
 }

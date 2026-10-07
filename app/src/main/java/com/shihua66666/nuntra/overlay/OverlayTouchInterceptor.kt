@@ -53,6 +53,13 @@ class OverlayTouchInterceptor @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_MOVE -> {
+                // ★ 多指（>=2）时不抢手势：那是双指捏合缩放，
+                //   必须完整交给 Compose 的 detectTransformGestures 处理。
+                //   若这里抢走，捏合就会变成「窗口跟着第一根手指乱跑」。
+                if (ev.pointerCount > 1) {
+                    dragging = false
+                    return false
+                }
                 if (!dragging) {
                     val dx = kotlin.math.abs(ev.rawX - downX)
                     val dy = kotlin.math.abs(ev.rawY - downY)
@@ -90,6 +97,15 @@ class OverlayTouchInterceptor @JvmOverloads constructor(
      * 现象就是「浮窗拖不动」。
      */
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // 拖动过程中若第二根手指落下，说明用户要做捏合：立刻结束拖动并放行，
+        // 避免「一边拖一边被当成缩放」。
+        if (event.pointerCount > 1) {
+            if (dragging) {
+                dragging = false
+                gesture?.endGesture()
+            }
+            return false
+        }
         val detector = gesture
         if (detector != null) return detector.onTouch(this, event)
         return super.onTouchEvent(event)

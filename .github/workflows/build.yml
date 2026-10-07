@@ -13,6 +13,15 @@ concurrency:
 env:
   # 必须与 AGP 8.13.2 匹配：AGP 8.x 无法在 Gradle 9.6+ 上运行
   # （org.gradle.api.problems.internal.InternalProblems 在 Gradle 9.6.0 被移除）。
+  #
+  # ⚠ 已知警告（**不阻塞构建**）：CI 日志里会出现
+  #     w: ⚠️ Deprecated Gradle Version
+  #     The minimum supported Gradle version will become Gradle 8.14.4 in Kotlin 2.5.0.
+  #   当前 Kotlin 是 2.4.20，因此现在只是警告。
+  #   **等升级到 Kotlin 2.5+ 时**必须同时把这里与 gradle-wrapper.properties 升到 8.14.4：
+  #     ./gradlew wrapper --gradle-version 8.14.4 --distribution-type bin
+  #   不提前升级的原因：Gradle 版本变更曾导致 AGP 8.13.2 直接无法运行，
+  #   为一个警告去动构建基础设施不划算。
   GRADLE_VERSION: "8.13"
 
 jobs:
@@ -30,6 +39,20 @@ jobs:
           #   版本号就永远不递增了。
           fetch-depth: 0
 
+      # ★ 构建指纹：一眼判断「这份日志是不是新版工作流产出的」。
+      #   排查时最常见的坑就是拿着一份旧日志分析半天（本项目已经踩过）。
+      - name: Build fingerprint
+        run: |
+          echo "=========================================================="
+          echo " Nuntra CI 构建指纹"
+          echo " 工作流版本: fixed-signing + versionCode + backup/restore v2"
+          echo " commit   : ${{ github.sha }}"
+          echo " run      : #${{ github.run_number }}  attempt ${{ github.run_attempt }}"
+          echo " 时间(UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "=========================================================="
+
+      # 构建指纹与下面的 gradle 输出一并留档；若日志里没有上面这段横幅，
+      # 就说明它是旧工作流产出的，不要拿来排查当前问题。
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
@@ -112,6 +135,54 @@ jobs:
           [ "$ACTUAL" = "$EXPECTED" ] || { echo "ERROR: applicationId 已变更！会导致覆盖安装失败、数据丢失。"; exit 1; }
           [ "$NS" = "$EXPECTED" ] || { echo "ERROR: namespace 已变更！"; exit 1; }
           echo "包名锁定校验通过"
+
+      # ★★ 依赖兼容性锁定闸门 ★★
+      #
+      #   本项目曾被这个坑卡死整整一轮：35 条 AAR metadata 报错，
+      #   因为 compose 1.12.x / core-ktx 1.19.x 要求 compileSdk 37 + AGP 9.1.0，
+      #   而 AGP 8.13.2 支持的 compileSdk 上限是 36。
+      #
+      #   修完之后，这条结论必须被固化下来 —— 否则下一个人（包括未来的我）
+      #   再顺手升一次依赖，就会重新掉进同一个坑，再去看 35 条 AAR 报告。
+      - name: Dependency compatibility lock gate
+        run: |
+          set -euo pipefail
+          fail=0
+          TOML=gradle/libs.versions.toml
+
+          AGP=$(grep -oP '^agp\s*=\s*"\K[^"]+' "$TOML" | head -n1)
+          CS=$(grep -oP 'compileSdk\s*=\s*\K[0-9]+' app/build.gradle.kts | head -n1)
+          CORE=$(grep -oP '^coreKtx\s*=\s*"\K[^"]+' "$TOML" | head -n1)
+          BOM=$(grep -oP '^composeBom\s*=\s*"\K[^"]+' "$TOML" | head -n1)
+          KOTLIN=$(grep -oP '^kotlin\s*=\s*"\K[^"]+' "$TOML" | head -n1)
+          echo "AGP=$AGP  compileSdk=$CS  core-ktx=$CORE  composeBom=$BOM  kotlin=$KOTLIN"
+
+          # 1) compileSdk 必须 >= 36：下面这些依赖的 minCompileSdk 就是 36
+          if [ "${CS:-0}" -lt 36 ]; then
+            echo "ERROR: compileSdk=$CS 过低（要求 >= 36），checkDebugAarMetadata 会失败"
+            fail=1
+          fi
+
+          # 2) core-ktx 必须 < 1.19：1.19+ 要求 compileSdk 37 与 AGP 9.1.0
+          MAJOR=${CORE%%.*}; REST=${CORE#*.}; MINOR=${REST%%.*}
+          if [ "$MAJOR" -gt 1 ] || { [ "$MAJOR" -eq 1 ] && [ "$MINOR" -ge 19 ]; }; then
+            echo "ERROR: core-ktx=$CORE 需要 compileSdk 37 + AGP 9.1.0，与 AGP $AGP 不兼容"
+            fail=1
+          fi
+
+          # 3) Compose BOM 不得高于 2026.06.01（再高就是 compose-ui 1.12.x，要求 compileSdk 37）
+          if [[ "$BOM" > "2026.06.01" ]]; then
+            echo "ERROR: composeBom=$BOM 高于 2026.06.01，会要求 compileSdk 37"
+            fail=1
+          fi
+
+          # 4) AGP 高于 8.13.2 时 compileSdk 上限会变化，给警告而不是失败
+          if [[ "$AGP" > "8.13.2" ]]; then
+            echo "::warning::AGP=$AGP 高于 8.13.2，compileSdk 上限可能提升，请重新核对依赖"
+          fi
+
+          [ "$fail" -eq 0 ] || exit 1
+          echo "依赖兼容性校验通过：与 AGP $AGP / compileSdk $CS 的组合是已知可用的"
 
       - name: Build debug APK
         env:

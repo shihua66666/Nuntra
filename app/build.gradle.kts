@@ -48,21 +48,31 @@ val computedVersionName = "1.0." + gitCommitCount
 val debugKeystorePassword = "android"
 val debugKeystoreAlias = "androiddebugkey"
 
-val keystoreProps = java.util.Properties().apply {
+// 刻意不用 build script 里的 local fun / run+return@run：
+// 那些写法在 Kotlin DSL 脚本里虽然合法，但会让配置期出错的排查成本变高。
+// 这里全部写成最朴素的 val + 表达式，配置期行为一目了然。
+val keystoreProps = java.util.Properties()
+runCatching {
     val f = rootProject.file("keystore.properties")
-    if (f.exists()) runCatching { f.inputStream().use { load(it) } }
-        .onFailure { println("[nuntra] 读取 keystore.properties 失败：${it.message}") }
+    if (f.exists()) f.inputStream().use { keystoreProps.load(it) }
+}.onFailure { println("[nuntra] 读取 keystore.properties 失败：" + it.message) }
+
+/** 取签名参数：环境变量优先（CI），其次 keystore.properties（本地）。 */
+val signingValue: (String, String) -> String? = { propKey, envKey ->
+    val raw = System.getenv(envKey) ?: keystoreProps.getProperty(propKey)
+    if (raw.isNullOrBlank()) null else raw
 }
 
-fun signingValue(propKey: String, envKey: String): String? =
-    (System.getenv(envKey) ?: keystoreProps.getProperty(propKey))?.takeIf { it.isNotBlank() }
+val envKeystorePath = System.getenv("KEYSTORE_PATH")
+val repoKeystore = rootProject.file("app/keystore/debug.keystore")
+val propKeystore = keystoreProps.getProperty("storeFile")?.let { rootProject.file(it) }
 
-val fixedKeystoreFile: java.io.File? = run {
-    val fromEnv = System.getenv("KEYSTORE_PATH")?.takeIf { it.isNotBlank() }?.let { java.io.File(it) }
-    if (fromEnv != null && fromEnv.exists()) return@run fromEnv
-    val inRepo = rootProject.file("app/keystore/debug.keystore")
-    if (inRepo.exists()) return@run inRepo
-    keystoreProps.getProperty("storeFile")?.let { rootProject.file(it) }?.takeIf { it.exists() }
+val fixedKeystoreFile: java.io.File? = when {
+    !envKeystorePath.isNullOrBlank() && java.io.File(envKeystorePath).exists() ->
+        java.io.File(envKeystorePath)
+    repoKeystore.exists() -> repoKeystore
+    propKeystore != null && propKeystore.exists() -> propKeystore
+    else -> null
 }
 val hasFixedSigning = fixedKeystoreFile != null
 
@@ -114,9 +124,10 @@ android {
             isMinifyEnabled = false
             // ★★ 关键：debug 也用固定签名 ★★
             //   不固定的话 CI 每次都会生成新密钥，APK 无法覆盖安装。
-            if (hasFixedSigning) {
-                signingConfig = signingConfigs.getByName("fixed")
-            }
+            // findByName 兜底：万一定名配置因某种原因没创建，也退回默认 debug 签名，
+            // 绝不让「签名配置缺失」变成整个构建失败。
+            signingConfig = signingConfigs.findByName("fixed")
+                ?: signingConfigs.getByName("debug")
         }
         release {
             isMinifyEnabled = false

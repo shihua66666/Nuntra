@@ -118,7 +118,35 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: ./gradlew assembleDebug --stacktrace --no-daemon
+        run: |
+          # 保留完整输出到文件：失败时下面的步骤会把它打印到控制台，
+          # 这样你不下载 artifact 也能直接看到真正的错误。
+          ./gradlew assembleDebug --stacktrace --no-daemon --console=plain 2>&1 | tee gradle-build.log
+
+      # ★ 失败时把真错误直接打到控制台，避免只看到一句 BUILD FAILED。
+      - name: Dump Gradle failure (quick read)
+        if: failure()
+        run: |
+          echo "==================== 编译错误行（e: file:///）===================="
+          grep -n "^e: " gradle-build.log || echo "(没有 Kotlin 编译错误行)"
+          echo
+          echo "==================== FAILURE 上下文 ===================="
+          grep -n -B 4 -A 40 "FAILURE: Build failed" gradle-build.log || true
+          echo
+          echo "==================== gradle-build.log 最后 120 行 ===================="
+          tail -n 120 gradle-build.log || true
+          echo
+          echo "==================== problems-report 摘要 ===================="
+          REPORT=""
+          for f in build/reports/problems/problems-report.html app/build/reports/problems/problems-report.html; do
+            if [ -f "$f" ]; then REPORT="$f"; break; fi
+          done
+          if [ -n "$REPORT" ]; then
+            echo "报告文件：$REPORT"
+            sed -e "s/<[^>]*>/ /g" "$REPORT" | tr -s " " " " | grep -v "^ *$" | head -n 150 || true
+          else
+            echo "(未找到 problems-report.html)"
+          fi
 
       # 打印签名指纹：多次构建之间它必须完全一致，否则覆盖安装仍会失败。
       # 这是「签名是否真的固定」最直接的证据。
@@ -152,7 +180,9 @@ jobs:
         with:
           name: nuntra-build-reports
           path: |
+            gradle-build.log
+            build/reports/problems/**
             app/build/reports/**
             app/build/outputs/logs/**
-          if-no-files-found: ignore
+          if-no-files-found: warn
           retention-days: 7

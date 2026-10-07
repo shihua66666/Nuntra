@@ -118,12 +118,24 @@ object BackupManager {
         )
     }
 
+    /**
+     * 显式取序列化器。
+     *
+     * ★ 为什么不用 `json.encodeToString(value)` / `json.decodeFromString<T>(text)`：
+     *   那两个是 `kotlinx.serialization` 包里的**顶层扩展函数**，必须显式 import
+     *   （`import kotlinx.serialization.encodeToString`）。忘了 import 时编译器只报
+     *   unresolved reference，看起来很像「库版本不对」，极易误判。
+     *   而下面这种「显式传序列化器」的形式是 StringFormat 的**成员函数**，
+     *   零 import、与项目里 TagRepository 的写法完全一致 —— 不会出这类问题。
+     */
+    private val backupSerializer = ConfigBackup.serializer()
+
     /** 序列化为 JSON 文本。失败抛异常，由调用方兜住（不要静默返回空串）。 */
-    fun encode(backup: ConfigBackup): String = json.encodeToString(backup)
+    fun encode(backup: ConfigBackup): String = json.encodeToString(backupSerializer, backup)
 
     /** 解析 JSON 文本。 */
     fun decode(text: String): ConfigBackup {
-        val parsed = json.decodeFromString<ConfigBackup>(text)
+        val parsed = json.decodeFromString(backupSerializer, text)
         if (parsed.schema > BACKUP_SCHEMA) {
             throw IllegalArgumentException(
                 "备份文件版本过新（schema=" + parsed.schema + " > 支持的 " + BACKUP_SCHEMA + "）",

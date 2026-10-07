@@ -114,12 +114,24 @@ fun ExpandedPanel(
                     //     **顶层扩展函数**，需要额外 import —— 上一版正是漏了它导致编译失败。
                     // 坐标口径与拦截器里的 ev.x / ev.y 一致：都以窗口左上角为原点。
                     val topLeft = coords.localToWindow(Offset.Zero)
+                    val top = topLeft.y.toInt()
+                    val bottom = (topLeft.y + coords.size.height).toInt()
+                    // ★★ 横向取「整窗宽度」而不是标签栏自身宽度（你的终极备选方案）★★
+                    //
+                    //   原因：横向坐标是最容易出错的一维 ——
+                    //   只要窗口有偏移量、或状态栏/导航栏算错一格，
+                    //   标签栏右侧就会落进「非禁区」，手指按在那里仍会被拖走。
+                    //   与其在 X 轴上对齐两个坐标系，不如直接放弃 X 轴判定：
+                    //   只要手势起点在这个**高度条带**内，就一律不拖窗口。
+                    //
+                    //   代价：标签栏那一行不能再拖动窗口 ——
+                    //   但拖窗口可用标题栏/正文区，而「标签栏能滑」是不可妥协的。
                     onFilterBarBounds(
                         android.graphics.Rect(
-                            topLeft.x.toInt(),
-                            topLeft.y.toInt(),
-                            (topLeft.x + coords.size.width).toInt(),
-                            (topLeft.y + coords.size.height).toInt(),
+                            -BAND_HALF_WIDTH,
+                            top,
+                            BAND_HALF_WIDTH,
+                            bottom,
                         ),
                     )
                 },
@@ -170,6 +182,14 @@ fun ExpandedPanel(
 
 /** 底部操作栏预留高度：与 PanelBottomBar 实际高度相当（含上下 padding）。 */
 private val BOTTOM_BAR_RESERVE = 48.dp
+
+/**
+ * 禁区条带的半宽（px）：横向只在 Y 轴上判定，X 轴取一个足够大的范围。
+ *
+ * 用「足够大」而不是 Int.MAX_VALUE：避免极端值在 Rect.contains 里产生算术意外，
+ * 10 万 px 已远超任何真实屏幕宽度（最大也就 4K 竖屏 ≈ 2160px）。
+ */
+private const val BAND_HALF_WIDTH = 100_000
 
 /** 标题栏右侧摘要：不显示无意义的前缀，尽可能短。 */
 private fun filterSummary(selectedTagCount: Int, total: Int, unread: Int): String {

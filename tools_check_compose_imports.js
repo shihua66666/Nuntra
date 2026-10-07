@@ -22,6 +22,7 @@ const EXTENSIONS = [
   "boundsInRoot", "boundsInWindow", "detectTapGestures", "detectTransformGestures",
   "detectDragGesturesAfterLongPress", "graphicsLayer", "zIndex", "aspectRatio",
   "wrapContentSize", "offset", "rotate", "scale",
+  "awaitFirstDown", "waitForUpOrCancellation", "awaitPointerEventScope",
 ];
 
 function walk(dir, out) {

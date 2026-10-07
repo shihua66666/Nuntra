@@ -3,6 +3,8 @@ package com.shihua66666.nuntra.ui.overlay
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,6 +20,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -46,9 +50,33 @@ fun TagFilterBar(
 ) {
     val c = LocalAppColors.current
 
+    // ★★ 第二道保险：标准 Android 的「子 View 抢手势」机制 ★★
+    //
+    //   在 ACTION_DOWN 时调用 parent.requestDisallowInterceptTouchEvent(true)，
+    //   父容器（OverlayTouchInterceptor）的 onInterceptTouchEvent 之后**不会再被调用**，
+    //   因此它没有任何机会把这次横向滑动抢走。
+    //
+    //   为什么还要这一道：它**完全不依赖坐标系** ——
+    //   窗口偏移、状态栏高度、缩放导致的坐标差异统统不影响它。
+    //   与「禁区条带」互为冗余：条带负责起始判定，这里负责整轮手势的归属权。
+    val view = LocalView.current
+    val claimGesture = Modifier.pointerInput(Unit) {
+        awaitPointerEventScope {
+            while (true) {
+                awaitFirstDown(requireUnconsumed = false)
+                view.parent?.requestDisallowInterceptTouchEvent(true)
+                // 等这一轮手势结束（抬起或取消）再把拦截权还回去，
+                // 否则会永久禁用窗口拖动。
+                waitForUpOrCancellation()
+                view.parent?.requestDisallowInterceptTouchEvent(false)
+            }
+        }
+    }
+
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .then(claimGesture)
             .horizontalScroll(scrollState)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),

@@ -189,6 +189,13 @@ fun OverlayContent(
                 onOpenSettings = onOpenSettings,
                 onClearMessages = onClearMessages,
                 onCollapse = onCollapse,
+                // ★★ 这一行就是「标签栏滑不动」的真凶 ★★
+                //
+                //   ExpandedPanel 的 onFilterBarBounds 有默认值 = {}，
+                //   之前这里漏传，回调变成空实现 → touchInterceptor.noDragBounds 永远是 null
+                //   → 拦截器照旧把横向滑动当成拖动窗口。
+                //   有默认值的回调漏传**不会编译报错**，因此只能靠人工/闸门发现。
+                onFilterBarBounds = onFilterBarBounds,
                 content = messageList,
             )
         }

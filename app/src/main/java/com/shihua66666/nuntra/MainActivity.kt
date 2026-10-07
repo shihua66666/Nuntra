@@ -37,6 +37,7 @@ import com.shihua66666.nuntra.model.Tag
 import com.shihua66666.nuntra.monitor.SmsAppResolver
 import com.shihua66666.nuntra.overlay.OverlayOrchestrator
 import com.shihua66666.nuntra.overlay.OverlayService
+import com.shihua66666.nuntra.overlay.OverlayWatchdog
 import com.shihua66666.nuntra.perm.PermissionChecker
 import com.shihua66666.nuntra.ui.MainScreen
 import com.shihua66666.nuntra.ui.NuntraNavHost
@@ -100,8 +101,23 @@ class MainActivity : ComponentActivity() {
         }.onFailure { tr -> Logx.swallow("MainActivity", "setContent", tr) }
     }
 
+    /**
+     * 是否已在本进程内尝试过自动复活。
+     *
+     * 只在第一次 onResume 尝试：之后由 AlarmManager 守护与屏幕亮起监听接管，
+     * 避免每次切回前台都去启动一次服务。
+     */
+    private var autoRestoreAttempted = false
+
     override fun onResume() {
         super.onResume()
+        // ★ 自动复活：总开关本来是开着的，但悬浮窗不在（被一键清理杀掉了）→
+        //   立刻恢复，不需要用户手动再点一次总开关。
+        if (!autoRestoreAttempted) {
+            autoRestoreAttempted = true
+            runCatching { OverlayWatchdog.tryRestore(this, "应用回到前台") }
+                .onFailure { Logx.swallow("MainActivity", "autoRestore", it) }
+        }
         // 触发重组 → 重新计算 readiness。ColorOS 等系统会在后台回收权限，
         // 因此「每次回前台复检」是这里唯一的正确做法。
         resumeTick++

@@ -175,6 +175,16 @@ class AppPreferences(private val context: Context) {
         }
     }
 
+    /**
+     * 同步读取总开关（仅供守护 / 启动复活使用）。
+     *
+     * 与 overlayCrashFlagBlocking 同一思路：守护逻辑需要一个「立刻」的答案，
+     * 而它只读一个布尔值、耗时极小；整体被 runCatching 包住，异常退化为 false。
+     */
+    fun masterSwitchEnabledBlocking(): Boolean = runCatching {
+        kotlinx.coroutines.runBlocking { store.data.first()[KEY_MASTER_SWITCH] ?: false }
+    }.getOrDefault(false)
+
     // ── 启动自愈标记 ─────────────────────────────────────────────
     /**
      * 上一次启动是否在「挂载悬浮窗之后」崩溃。

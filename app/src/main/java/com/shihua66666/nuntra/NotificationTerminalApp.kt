@@ -4,6 +4,7 @@ import android.app.Application
 import com.shihua66666.nuntra.core.CrashRecorder
 import com.shihua66666.nuntra.core.Logx
 import com.shihua66666.nuntra.core.ServiceLocator
+import com.shihua66666.nuntra.overlay.OverlayWatchdog
 
 /**
  * 应用入口。
@@ -37,6 +38,10 @@ class NotificationTerminalApp : Application() {
             }
             // 4) 预热（异步，不阻塞）
             ServiceLocator.warmUp()
+            // 5) 注册「屏幕亮起」监听（动态注册，必须 —— ACTION_SCREEN_ON 无法静态接收）。
+            //    注册在 applicationContext 上且不注销：通知监听服务会让进程长期存活，
+            //    进程在，这条监听就有效。
+            OverlayWatchdog.registerScreenOn(this)
         }.onFailure { tr ->
             runCatching { Logx.e("App", "启动初始化部分失败（不影响进入界面）", tr) }
         }

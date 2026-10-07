@@ -7,6 +7,7 @@ import android.view.View
 import android.view.WindowManager
 import com.shihua66666.nuntra.core.Logx
 import com.shihua66666.nuntra.core.NtToast
+import com.shihua66666.nuntra.ui.theme.OverlayDimens
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -208,10 +209,32 @@ class OverlayWindowController(
         if (currentState == OverlayWindowState.CAPSULE) return
         if (windowWidth <= 0 || windowHeight <= 0) return
 
-        val maxW = (screenWidth() * MAX_W_RATIO).toInt().coerceAtLeast(MIN_RESIZE_PX)
-        val maxH = (screenHeight() * MAX_H_RATIO).toInt().coerceAtLeast(MIN_RESIZE_PX)
-        val newW = (windowWidth * zoom).toInt().coerceIn(MIN_RESIZE_PX, maxW)
-        val newH = (windowHeight * zoom).toInt().coerceIn(MIN_RESIZE_PX, maxH)
+        // ★★ 分形态的最小尺寸（dp → px）★★
+        //
+        //   之前两种形态共用 MIN_RESIZE_PX = 200，结果：
+        //     · 面板能缩到很小 → 底部的「折叠 / 设置」操作栏被挤出窗口，点不到；
+        //     · 小窗能缩到极小 → 内容完全变形。
+        //   现在按形态取各自下限（面板 200x140dp、小窗 120x80dp）。
+        val density = context.resources.displayMetrics.density
+        val minWidthDp: Float
+        val minHeightDp: Float
+        if (currentState == OverlayWindowState.MINI) {
+            minWidthDp = OverlayDimens.miniMinWidth.value
+            minHeightDp = OverlayDimens.miniMinHeight.value
+        } else {
+            minWidthDp = OverlayDimens.panelMinWidth.value
+            minHeightDp = OverlayDimens.panelMinHeight.value
+        }
+        val minW = (minWidthDp * density).toInt().coerceAtLeast(1)
+        val minH = (minHeightDp * density).toInt().coerceAtLeast(1)
+
+        val maxW = (screenWidth() * MAX_W_RATIO).toInt().coerceAtLeast(minW)
+        val maxH = (screenHeight() * MAX_H_RATIO).toInt().coerceAtLeast(minH)
+        val newW = (windowWidth * zoom).toInt().coerceIn(minW, maxW)
+        val newH = (windowHeight * zoom).toInt().coerceIn(minH, maxH)
+        // ★ 到达下限时这里直接返回：缩小被「拦截」。
+        //   coerceIn 只夹住下限，放大方向不受影响 ——
+        //   因此用户随时可以重新拉大，不存在「缩到最小就卡死」。
         if (newW == windowWidth && newH == windowHeight) return
 
         windowWidth = newW
@@ -372,11 +395,16 @@ class OverlayWindowController(
         if (state == OverlayWindowState.PANEL) {
             val saved = panelSize
             if (saved != null) {
-                val maxW = (screenWidth() * MAX_W_RATIO).toInt().coerceAtLeast(MIN_DIMEN_PX)
-                val maxH = (screenHeight() * MAX_H_RATIO).toInt().coerceAtLeast(MIN_DIMEN_PX)
+                val density = context.resources.displayMetrics.density
+                val minW = (OverlayDimens.panelMinWidth.value * density).toInt()
+                    .coerceAtLeast(MIN_DIMEN_PX)
+                val minH = (OverlayDimens.panelMinHeight.value * density).toInt()
+                    .coerceAtLeast(MIN_DIMEN_PX)
+                val maxW = (screenWidth() * MAX_W_RATIO).toInt().coerceAtLeast(minW)
+                val maxH = (screenHeight() * MAX_H_RATIO).toInt().coerceAtLeast(minH)
                 return OverlaySizePx(
-                    saved.width.coerceIn(MIN_DIMEN_PX, maxW),
-                    saved.height.coerceIn(MIN_DIMEN_PX, maxH),
+                    saved.width.coerceIn(minW, maxW),
+                    saved.height.coerceIn(minH, maxH),
                 )
             }
         }
@@ -461,9 +489,6 @@ class OverlayWindowController(
 
         /** 屏幕边缘留白（px）。 */
         const val MARGIN_PX = 12
-
-        /** 缩放下限（px）：再小就看不清内容了。 */
-        private const val MIN_RESIZE_PX = 200
 
         /** 缩放上限：相对屏幕宽/高的最大比例，避免窗口大到拖不动。 */
         private const val MAX_W_RATIO = 0.96f

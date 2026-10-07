@@ -13,4 +13,11 @@
     <string name="fgs_title">通知中继终端运行中</string>
     <string name="fgs_text_idle">未读 0 条 · 点击展开面板</string>
     <string name="fgs_text_unread">未读 %1$d 条 · 点击展开面板</string>
+    <string name="fgs_action_restore">恢复悬浮窗</string>
+
+    <!-- 守护（被杀后自动复活）保底通知 -->
+    <string name="watchdog_channel_name">悬浮窗守护</string>
+    <string name="watchdog_title">悬浮窗已被系统清理</string>
+    <string name="watchdog_text">点击这里立即恢复悬浮窗；若无效可打开应用重新开启总开关</string>
+    <string name="watchdog_action_open">打开应用</string>
 </resources>

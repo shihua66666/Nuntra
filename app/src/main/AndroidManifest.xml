@@ -79,6 +79,16 @@
           targetSdk 34 起每个前台服务必须声明 type；本项目用途是「常驻浮窗」，
           与 dataSync / mediaPlayback 等类型均不符，因此选 specialUse 并给出 subtype 说明。
         -->
+        <!--
+          悬浮窗守护接收器（**必须静态注册**）：
+          AlarmManager 的 5 分钟守护闹钟要在「进程已被杀掉」时也能唤醒它，
+          这正是「被杀后自动复活」的关键路径。
+          另外它也接收用户点击保底通知的恢复请求。
+        -->
+        <receiver
+            android:name=".overlay.OverlayWatchdogReceiver"
+            android:exported="false" />
+
         <service
             android:name=".overlay.OverlayService"
             android:exported="false"

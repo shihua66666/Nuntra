@@ -59,7 +59,8 @@ fun ExpandedPanel(
     val mono: FontFamily = LocalMonoFamily.current
     val horizontalPadding = if (compact) 10.dp else 12.dp
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
         // ── 标题栏 ──
         Row(
             modifier = Modifier
@@ -106,7 +107,19 @@ fun ExpandedPanel(
             content()
         }
 
-        // ── 底部操作栏 ──
+            // ★ 为底部操作栏预留高度：底栏已移出 Column（见下方 Box 的 align），
+            //   这里用等高的占位保证内容区不被底栏压住。
+            Spacer(Modifier.height(BOTTOM_BAR_RESERVE))
+        }
+
+        // ★★ 底部操作栏锚定在窗口最底部 ★★
+        //
+        //   为什么从 Column 末尾移到这里：
+        //     放在 Column 里时，一旦窗口高度不足（用户捏合缩得很小），
+        //     固定子项总高超过窗口高度就会溢出 → 底栏被裁掉，
+        //     用户再也点不到「折叠」「设置」。
+        //     放进 Box 并 align(BottomCenter) 后由 Box 独立摆放，
+        //     永远贴在窗口底部，不受内容区高度影响。
         PanelBottomBar(
             messageCount = messageCount,
             filterActive = filterVisible,
@@ -114,9 +127,13 @@ fun ExpandedPanel(
             onOpenSettings = onOpenSettings,
             onClearMessages = onClearMessages,
             onCollapse = onCollapse,
+            modifier = Modifier.align(Alignment.BottomCenter),
         )
     }
 }
+
+/** 底部操作栏预留高度：与 PanelBottomBar 实际高度相当（含上下 padding）。 */
+private val BOTTOM_BAR_RESERVE = 48.dp
 
 /** 标题栏右侧摘要：不显示无意义的前缀，尽可能短。 */
 private fun filterSummary(selectedTagCount: Int, total: Int, unread: Int): String {

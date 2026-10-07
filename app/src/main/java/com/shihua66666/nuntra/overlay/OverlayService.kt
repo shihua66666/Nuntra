@@ -121,6 +121,12 @@ class OverlayService : Service(), OverlayGestureCallbacks {
         runCatching { startForegroundCompat() }
             .onFailure { Logx.swallow(TAG, "startForegroundCompat", it) }
 
+        // ★ 启动守护闹钟：每 5 分钟检查一次窗口是否还在。
+        //   即使本服务随后被「一键清理」杀掉，闹钟依然存在（它注册在系统里），
+        //   下一次触发时会由 OverlayWatchdogReceiver 把服务重新拉起来。
+        runCatching { OverlayWatchdog.schedule(this) }
+            .onFailure { Logx.swallow(TAG, "scheduleWatchdog", it) }
+
         // 第二步才做组件初始化；失败不影响「已进入前台」这一事实。
         runCatching { initInternal() }.onFailure { tr ->
             Logx.e(TAG, "组件初始化失败，服务保持前台但不出窗口", tr)
@@ -174,6 +180,9 @@ class OverlayService : Service(), OverlayGestureCallbacks {
 
         if (intent?.action == ACTION_STOP) {
             Logx.i(TAG, "收到停止指令")
+            // 用户明确关闭总开关：连同守护闹钟一起停掉，不再自动复活
+            runCatching { OverlayWatchdog.cancel(this) }
+                .onFailure { Logx.swallow(TAG, "cancelWatchdog", it) }
             // 先移除窗口再停止服务：保证「停止」与「不可见」同时发生。
             detachOverlay()
             stopSelf()
@@ -621,11 +630,22 @@ class OverlayService : Service(), OverlayGestureCallbacks {
         } else {
             getString(R.string.fgs_text_unread, unread)
         }
+        // 「恢复悬浮窗」动作：即使本服务被系统清理，这条通知虽会消失，
+        // 但守护逻辑会另发一条带同样动作的保底通知（见 OverlayWatchdog）。
+        // 这里的动作是给「服务还在但窗口被系统回收」这种边缘情况用的。
+        val restoreIntent = PendingIntent.getBroadcast(
+            this,
+            RC_NOTIFICATION_RESTORE,
+            Intent(this, OverlayWatchdogReceiver::class.java)
+                .setAction(OverlayWatchdog.ACTION_RESTORE),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         return NotificationCompat.Builder(this, CHANNEL_OVERLAY)
             .setSmallIcon(R.drawable.ic_stat_terminal)
             .setContentTitle(getString(R.string.fgs_title))
             .setContentText(text)
             .setContentIntent(contentIntent)
+            .addAction(0, getString(R.string.fgs_action_restore), restoreIntent)
             .setOngoing(true)
             .setSilent(true)
             .setShowWhen(false)
@@ -757,6 +777,9 @@ class OverlayService : Service(), OverlayGestureCallbacks {
         private const val CHANNEL_PRIORITY = "nuntra_priority"
         private const val NOTIFICATION_ID = 1001
 
+        /** 通知动作 PendingIntent 的 requestCode。 */
+        private const val RC_NOTIFICATION_RESTORE = 1001
+
         const val ACTION_START = "com.shihua66666.nuntra.action.START_OVERLAY"
         const val ACTION_STOP = "com.shihua66666.nuntra.action.STOP_OVERLAY"
 
@@ -774,6 +797,26 @@ class OverlayService : Service(), OverlayGestureCallbacks {
                 // 用户从 UI 点击时正常，系统后台限制时不应崩。
                 Logx.swallow(TAG, "start", tr)
             }
+        }
+
+        /**
+         * 启动服务并**报告是否成功**。
+         *
+         * 与 [start] 的区别：把「系统拒绝后台启动前台服务」这个结果暴露给调用方，
+         * 以便守护逻辑在失败时发一条「点击恢复」的保底通知，而不是静默失败。
+         * Android 12+ 的 ForegroundServiceStartNotAllowedException 就靠它兜住。
+         */
+        fun startAndReport(context: Context): Boolean = runCatching {
+            val intent = Intent(context, OverlayService::class.java).setAction(ACTION_START)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+            true
+        }.getOrElse { tr ->
+            Logx.w(TAG, "startAndReport 被系统拒绝：" + tr.javaClass.simpleName, tr)
+            false
         }
 
         fun stop(context: Context) {

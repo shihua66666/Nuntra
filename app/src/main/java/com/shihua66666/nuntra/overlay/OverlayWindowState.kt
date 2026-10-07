@@ -75,9 +75,14 @@ enum class OverlayWindowState {
                     val fallbackH = OverlayDimens.miniHeight.value.coerceAtMost(screenH * 0.6f)
                     val w = miniOverride?.width ?: dp(fallbackW, density)
                     val h = miniOverride?.height ?: dp(fallbackH, density)
+                    // 上下都要夹：上限防止超出屏幕，下限防止历史数据里存了过小的尺寸
+                    val minW = dp(OverlayDimens.miniMinWidth.value, density)
+                    val minH = dp(OverlayDimens.miniMinHeight.value, density)
+                    val maxW = dp(screenW * 0.96f, density).coerceAtLeast(minW)
+                    val maxH = dp(screenH * 0.85f, density).coerceAtLeast(minH)
                     OverlaySizePx(
-                        width = w.coerceAtMost(dp(screenW * 0.96f, density)),
-                        height = h.coerceAtMost(dp(screenH * 0.85f, density)),
+                        width = w.coerceIn(minW, maxW),
+                        height = h.coerceIn(minH, maxH),
                     )
                 }
             }

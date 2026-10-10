@@ -150,4 +150,59 @@ console.log(
     ? "  OK 未发现缺失的顶层扩展 import"
     : "  共 " + problems + " 处缺失",
 );
+
+// ══════════════════════════════════════════════════════════════
+// 附加检查：Gradle Kotlin DSL 里被遮蔽的根包名
+// ══════════════════════════════════════════════════════════════
+//
+// 本项目为此失败过一次 CI：build.gradle.kts 里写 `java.util.Properties()`，
+// 结果报 "Unresolved reference: util"，还级联出 "Unresolved reference: it"。
+//
+// 原因：在 Kotlin DSL 脚本里 `java` 会被 Gradle 生成的 java 扩展访问器
+// （JavaPluginExtension）遮蔽 —— `java.util.Properties()` 会去那个扩展上找 `util`。
+// 正确做法是显式 `import java.util.Properties` 后用 `Properties()`。
+//
+// 判据：非 import 行里出现「前面不是 . 或字母数字」的 java.<小写名> / kotlin.<小写名>。
+// 这样 libs.plugins.kotlin.android（前面有 .）与 kotlin("jvm")（后面无 .）都不会误报。
+function scanGradleKts(projectRoot) {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return 0;
+  let found = 0;
+  for (const file of walkGradle(projectRoot)) {
+    const raw = fs.readFileSync(file, "utf8");
+    const rel = path.relative(projectRoot, file).replace(/\\/g, "/");
+    const code = stripLiterals(raw);
+    code.split("\n").forEach((line, idx) => {
+      if (/^\s*import\s/.test(line)) return;
+      // 抓取完整限定名（至少三段，如 java.util.Properties），
+      // 否则建议会变成 "import java.util" —— 那在 Kotlin 里根本不合法。
+      const m = line.match(/(?<![\w.])(java|kotlin)\.[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+/);
+      if (!m) return;
+      const fq = m[0];
+      const parts = fq.split(".");
+      const simple = parts[parts.length - 1];
+      console.log("  !! " + rel + ":" + (idx + 1) + " 使用了 " + fq + "（根包名会被 Gradle 扩展遮蔽）");
+      console.log("     建议补：import " + fq);
+      console.log("     然后把代码里的 " + fq + " 改成 " + simple);
+      found++;
+    });
+  }
+  return found;
+}
+
+function walkGradle(root, out) {
+  out = out || [];
+  for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+    if (e.name === "build" || e.name === ".gradle" || e.name === ".git" || e.name === "node_modules") continue;
+    const full = path.join(root, e.name);
+    if (e.isDirectory()) walkGradle(full, out);
+    else if (e.name.endsWith(".gradle.kts")) out.push(full);
+  }
+  return out;
+}
+
+const gradleRoot = process.argv[3];
+if (gradleRoot) {
+  const extra = scanGradleKts(gradleRoot);
+  if (extra > 0) problems += extra;
+}
 process.exit(problems === 0 ? 0 : 1);

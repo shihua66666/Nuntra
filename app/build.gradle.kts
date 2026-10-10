@@ -1,4 +1,10 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+// ★ 必须显式 import，不能写全限定名 java.io.File / java.util.Properties：
+//   在 Gradle Kotlin DSL 里 `java` 会被 Gradle 生成的 java 扩展访问器
+//   （JavaPluginExtension）遮蔽，于是 `java.util.Properties()` 会去那个扩展上找 `util`，
+//   报 "Unresolved reference: util"（io 同理），并级联出 "Unresolved reference: it"。
+import java.io.File
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -51,7 +57,7 @@ val debugKeystoreAlias = "androiddebugkey"
 // 刻意不用 build script 里的 local fun / run+return@run：
 // 那些写法在 Kotlin DSL 脚本里虽然合法，但会让配置期出错的排查成本变高。
 // 这里全部写成最朴素的 val + 表达式，配置期行为一目了然。
-val keystoreProps = java.util.Properties()
+val keystoreProps = Properties()
 runCatching {
     val f = rootProject.file("keystore.properties")
     if (f.exists()) f.inputStream().use { keystoreProps.load(it) }
@@ -67,9 +73,9 @@ val envKeystorePath = System.getenv("KEYSTORE_PATH")
 val repoKeystore = rootProject.file("app/keystore/debug.keystore")
 val propKeystore = keystoreProps.getProperty("storeFile")?.let { rootProject.file(it) }
 
-val fixedKeystoreFile: java.io.File? = when {
-    !envKeystorePath.isNullOrBlank() && java.io.File(envKeystorePath).exists() ->
-        java.io.File(envKeystorePath)
+val fixedKeystoreFile: File? = when {
+    !envKeystorePath.isNullOrBlank() && File(envKeystorePath).exists() ->
+        File(envKeystorePath)
     repoKeystore.exists() -> repoKeystore
     propKeystore != null && propKeystore.exists() -> propKeystore
     else -> null

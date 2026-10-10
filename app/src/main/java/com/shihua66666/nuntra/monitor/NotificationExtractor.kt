@@ -26,7 +26,39 @@ data class ExtractedNotification(
     val messages: List<ExtractedMessage>,
     /** 通知的 group key，用于合并去重。 */
     val groupKey: String?,
+    /**
+     * 是否为「汇总 / 合并通知」（通知带 FLAG_GROUP_SUMMARY）。
+     *
+     * ★ 为什么需要这个标记：
+     *   微信在群里收到多条消息时，会额外发一条「群名（3 条新消息）」的汇总通知。
+     *   之前过滤器**一律丢弃**汇总通知 —— 这正是「群聊完全收不到」的根因之一。
+     *   现在改为允许入库，但要按「规范化摘要键」去重，保证只入库一条。
+     */
+    val isGroupSummary: Boolean = false,
 ) {
+    /**
+     * ★★ 名字候选 ★★
+     *
+     * 关注人匹配**只看这一组**，即 EXTRA_TITLE / EXTRA_CONVERSATION_TITLE /
+     * EXTRA_SUB_TEXT，外加合并通知里每条消息的发送者。
+     *
+     * 需求原文：「只要任意一个命中了关注人列表，就视为有效消息」。
+     * 群聊的名字在不同厂商/版本里落点不同：
+     *   · 微信群：EXTRA_TITLE = 群名，EXTRA_TEXT = 「张三：内容」
+     *   · 部分版本：EXTRA_CONVERSATION_TITLE = 群名，EXTRA_TITLE = 发送者
+     *   · 也有把群名塞进 EXTRA_SUB_TEXT 的
+     * 三个都取，任意命中即可，不必猜用户遇到的是哪一种。
+     */
+    val nameCandidates: List<String>
+        get() = buildList {
+            add(title)
+            add(conversationTitle)
+            add(subText)
+            messages.forEach { add(it.sender) }
+        }.filterNotNull()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
     /** 参与匹配的全部文本片段（顺序固定，便于复现）。 */
     val haystacks: List<String?>
         get() = buildList {
@@ -86,6 +118,8 @@ object NotificationExtractor {
             conversationTitle = stringOrNull(extras, Notification.EXTRA_CONVERSATION_TITLE),
             messages = readMessages(extras),
             groupKey = sbn.notification?.group,
+            isGroupSummary = ((sbn.notification?.flags ?: 0) and
+                Notification.FLAG_GROUP_SUMMARY) != 0,
         )
     }
 

@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.shihua66666.nuntra.model.MessageSortMode
 import com.shihua66666.nuntra.model.Tag
 import com.shihua66666.nuntra.model.TerminalMessage
 import com.shihua66666.nuntra.ui.theme.LocalAppColors
@@ -62,25 +63,29 @@ fun MessageList(
      *   打开这个开关后，已读项在下一次重组时立即消失。
      */
     hideRead: Boolean = false,
+    /** 排序方式：按时间（默认）或按关键词命中数。 */
+    sortMode: MessageSortMode = MessageSortMode.TIME,
     contentPadding: PaddingValues = PaddingValues(vertical = 4.dp),
 ) {
     val c = LocalAppColors.current
     val tagById = remember(tags) { tags.associateBy { it.id } }
-    val filtered = remember(messages, selectedTagIds, hideRead) {
-        val byTag = if (selectedTagIds.isEmpty()) {
-            messages
-        } else {
-            messages.filter { it.tagId in selectedTagIds }
-        }
-        // 已读过滤放在标签过滤之后：两者是「先选范围、再按已读收敛」的关系。
-        if (hideRead) byTag.filter { !it.read } else byTag
+    // 筛选 + 排序统一走 orderOverlayMessages：
+    // 悬浮窗服务算「命中 N 个关键词」提示时用的是同一个函数，
+    // 因此列表顺序与提示永远不会对不上。
+    val filtered = remember(messages, selectedTagIds, hideRead, sortMode) {
+        orderOverlayMessages(messages, selectedTagIds, hideRead, sortMode)
     }
 
     if (filtered.isEmpty()) {
         EmptyState(
             filteredByTag = selectedTagIds.isNotEmpty(),
-            // 有消息但被已读过滤清空时，空态文案要说清原因，否则用户以为消息丢了
-            hiddenByRead = hideRead && messages.any { it.read },
+            // ★★ 只有「确实一条未读都没有」时才允许说「已读消息已自动隐藏」★★
+            //
+            //   需求：未读数大于 0 时，列表里绝对不允许出现这个空态提示。
+            //   判据用**全部消息**里是否还有未读，而不是只看过滤后的结果 ——
+            //   否则「标签筛选 + 已读过滤」同时清空列表时，明明还有未读消息，
+            //   却给出一句自相矛盾的「已读已隐藏」。
+            hiddenByRead = hideRead && messages.isNotEmpty() && messages.none { !it.read },
             modifier = modifier,
         )
         return

@@ -21,9 +21,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.shihua66666.nuntra.model.MessageSortMode
 import com.shihua66666.nuntra.model.TagView
+import com.shihua66666.nuntra.ui.components.NtTextButton
 import com.shihua66666.nuntra.ui.theme.LocalAppColors
 import com.shihua66666.nuntra.ui.theme.LocalMonoFamily
 
@@ -51,6 +54,11 @@ fun ExpandedPanel(
     messageCount: Int,
     unreadCount: Int,
     compact: Boolean,
+    /** 当前排序方式（顶部「排序」按钮切换）。 */
+    sortMode: MessageSortMode,
+    /** 关键词命中提示，例如「命中 2 个关键词」；null 表示没配置关键词，不显示。 */
+    keywordHint: String?,
+    onToggleSort: () -> Unit,
     onToggleFilter: () -> Unit,
     onOpenSettings: () -> Unit,
     onClearMessages: () -> Unit,
@@ -94,6 +102,43 @@ fun ExpandedPanel(
                 fontSize = 11.sp,
                 fontFamily = mono,
             )
+        }
+
+        // ── 排序栏（需求 2-3 / 2-4）──
+        //
+        //   放在标题栏正下方：这里是「展开态顶部」，位置最直观；
+        //   底栏已经挤了 5 个按钮，再塞排序按钮会在窄面板里被压扁。
+        //   「命中 N 个关键词」紧跟在排序按钮右侧 —— 需求要求的「显示在排序按钮旁边」。
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = horizontalPadding,
+                    end = horizontalPadding,
+                    bottom = 6.dp,
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            NtTextButton(
+                text = sortMode.label,
+                onClick = onToggleSort,
+                // 处在「按命中数」时用强调色，一眼能看出当前不是默认排序
+                color = if (sortMode == MessageSortMode.KEYWORD_HITS) c.accent else null,
+            )
+            if (keywordHint.isNullOrEmpty()) {
+                Spacer(Modifier.weight(1f))
+            } else {
+                Text(
+                    text = keywordHint,
+                    color = c.textSecondary,
+                    fontSize = 11.sp,
+                    fontFamily = mono,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
 
         // ── 筛选栏（可隐藏）──

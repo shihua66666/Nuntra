@@ -14,6 +14,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import com.shihua66666.nuntra.model.MessageSortMode
 import com.shihua66666.nuntra.model.TagView
 import com.shihua66666.nuntra.overlay.OverlayWindowState
 import com.shihua66666.nuntra.ui.theme.AppColors
@@ -131,6 +132,11 @@ fun OverlayContent(
     selectedTagIds: Set<String>,
     messageCount: Int,
     filterVisible: Boolean,
+    /** 当前排序方式（顶部「排序」按钮切换）。 */
+    sortMode: MessageSortMode,
+    /** 关键词命中提示文案；null 表示不显示。 */
+    keywordHint: String?,
+    onToggleSort: () -> Unit,
     animateLamp: Boolean,
     onToggleTag: (String) -> Unit,
     onSelectAll: () -> Unit,
@@ -184,6 +190,9 @@ fun OverlayContent(
                 filterVisible = filterVisible,
                 messageCount = messageCount,
                 unreadCount = unreadCount,
+                sortMode = sortMode,
+                keywordHint = keywordHint,
+                onToggleSort = onToggleSort,
                 compact = windowState == OverlayWindowState.MINI,
                 onToggleFilter = onToggleFilter,
                 onOpenSettings = onOpenSettings,

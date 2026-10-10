@@ -172,13 +172,39 @@ class NuntraNotificationListener : NotificationListenerService() {
         source: SourceApp,
     ) {
         val packageName = sbn.packageName ?: return
-        // 短信来源再用包名二次确认一次：通知里的 category 等字段不可靠。
-        val dedupKey = sha256(
-            packageName + "|" +
-                extracted.title.orEmpty() + "|" +
-                extracted.mergedBody + "|" +
-                sbn.postTime
-        )
+
+        // ★★ 去重键：合并通知与普通通知用不同规则 ★★
+        //
+        //   普通通知：包名|标题|正文|postTime ——
+        //            同一条内容在同一毫秒只算一次，但「同一句话晚几分钟再说一次」算新消息。
+        //
+        //   合并通知（微信群的「群名（3 条新消息）」）：
+        //     **刻意不带 postTime**，并把「N 条新消息」里的数字归一化。
+        //     这类通知每来一条群消息就刷新一次，带上 postTime 会让每次刷新都入库一条，
+        //     悬浮窗里就出现大量重复的「群名（4 条新消息）」。
+        //     归一化之后，同一条合并通知无论刷新多少次都只入库一条（用户明确要求）。
+        val dedupKey = if (extracted.isGroupSummary) {
+            sha256(
+                packageName + "|summary|" +
+                    extracted.groupKey.orEmpty() + "|" +
+                    extracted.title.orEmpty() + "|" +
+                    normalizeMergeCount(extracted.mergedBody),
+            )
+        } else {
+            sha256(
+                packageName + "|" +
+                    extracted.title.orEmpty() + "|" +
+                    extracted.mergedBody + "|" +
+                    sbn.postTime,
+            )
+        }
+
+        // 展示用名字（私聊=联系人，群聊=群名）：
+        //   title 取不到时退回 conversationTitle / subText ——
+        //   这三个正是过滤阶段用的「名字候选」，口径保持一致。
+        val displayName = extracted.title
+            ?: extracted.conversationTitle
+            ?: extracted.subText
 
         serviceScope.launch {
             runCatching {
@@ -192,7 +218,7 @@ class NuntraNotificationListener : NotificationListenerService() {
                     dedupKey = dedupKey,
                     packageName = packageName,
                     source = source,
-                    contact = extracted.title,
+                    contact = displayName,
                     conversationTitle = extracted.conversationTitle,
                     body = extracted.mergedBody,
                     subText = extracted.subText,
@@ -202,6 +228,8 @@ class NuntraNotificationListener : NotificationListenerService() {
                     tagId = resolution.tagId,
                     postedAt = sbn.postTime,
                     isPriority = isPriority,
+                    // 汇总/合并通知标记：UI 与排查都要能区分它
+                    isSummary = extracted.isGroupSummary,
                 )
 
                 // 标签优先级已由 MessageStore 构造时注入，这里不再传递
@@ -381,6 +409,19 @@ class NuntraNotificationListener : NotificationListenerService() {
     }
 
     // ── 工具 ─────────────────────────────────────────────────────
+
+    /**
+     * 归一化合并通知里的计数：让「3 条新消息」与「4 条新消息」得到同一个去重键。
+     *
+     * 同时处理全角/半角数字与括号 —— 不同厂商的文案差异很大，
+     * 例如「群名（3条新消息）」「群名 (3 条新消息)」「群名（３条新消息）」。
+     * 任何异常都退回原文，绝不因为一条正则让通知丢失。
+     */
+    private fun normalizeMergeCount(text: String): String = runCatching {
+        text.replace(Regex("[0-9０-９]+\\s*条"), "#条")
+            .replace(Regex("[（(]\\s*[0-9０-９]+\\s*[)）]"), "(#)")
+            .trim()
+    }.getOrDefault(text)
 
     private fun sha256(input: String): String = runCatching {
         val digest = MessageDigest.getInstance("SHA-256")

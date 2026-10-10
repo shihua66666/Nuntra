@@ -45,6 +45,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.background
 import com.shihua66666.nuntra.ui.overlay.MessageList
 import com.shihua66666.nuntra.ui.overlay.OverlayContent
+import com.shihua66666.nuntra.ui.overlay.maxKeywordHits
+import com.shihua66666.nuntra.ui.overlay.orderOverlayMessages
 import com.shihua66666.nuntra.ui.theme.LocalAppColors
 import com.shihua66666.nuntra.ui.theme.TagPalette
 import kotlinx.coroutines.CoroutineScope
@@ -445,10 +447,19 @@ class OverlayService : Service(), OverlayGestureCallbacks {
         val next = uiState.windowState.toggleExpanded()
         uiState = uiState.withState(next)
         windowController.applyState(next)
-        if (next != OverlayWindowState.CAPSULE) {
-            // 展开面板即视为「已查看」：清未读并刷新前台通知
-            ServiceLocator.c.messageStore.markAllRead()
-        }
+        // ★★ 这里刻意**什么都不做** —— 尤其不做「标记已读」★★
+        //
+        //   之前这里是：
+        //     if (next != CAPSULE) messageStore.markAllRead()
+        //   而列表又默认隐藏已读项（clearReadOnTap 默认开），于是：
+        //     用户只是展开了一下悬浮窗 → 全部消息被标为已读 → 立刻从列表消失
+        //     → 看到「已读消息已自动隐藏」，而用户根本没点过任何消息。
+        //   这正是反馈里的「未读被误判为已读」。
+        //
+        //   现在的语义（需求原文）：
+        //     **只有点击了列表里的某一条并触发跳转后**，才把该条标记已读。
+        //     展开 / 收起、滑动列表、切换排序、切换筛选，都不改变已读状态。
+        //     标记已读的唯一入口是 openSourceChat()（点击消息时调用）。
     }
 
     override fun onDoubleTap() {
@@ -763,7 +774,17 @@ class OverlayService : Service(), OverlayGestureCallbacks {
         val clearReadOnTap by container.appPreferences.clearReadOnTap.collectAsState(initial = true)
         val tags by container.tagRepository.tags.collectAsState()
         val messages by container.messageStore.sorted.collectAsState()
+        val keywordSet by container.settingsRepository.keywords.collectAsState(initial = emptySet())
         val state = uiState
+        // 可见消息（筛选 + 排序）：与 MessageList 用的是**同一个纯函数**，
+        // 因此「命中 N 个关键词」的数值与列表顺序永远对得上。
+        val orderedMessages = remember(messages, state.selectedTagIds, clearReadOnTap, state.sortMode) {
+            orderOverlayMessages(messages, state.selectedTagIds, clearReadOnTap, state.sortMode)
+        }
+        // 没配置任何关键词时不显示提示，避免无意义的「命中 0 个关键词」占地方。
+        val keywordHint = remember(keywordSet, orderedMessages) {
+            if (keywordSet.isEmpty()) null else "命中 " + maxKeywordHits(orderedMessages) + " 个关键词"
+        }
         // tagViews 构造失败时退回空列表：空列表会被 UI 当成「无标签」，绝不崩
         val tagViews = remember(tags, messages) {
             runCatching { container.messageStore.tagViews(tags) }.getOrDefault(emptyList())
@@ -779,6 +800,10 @@ class OverlayService : Service(), OverlayGestureCallbacks {
             selectedTagIds = state.selectedTagIds,
             messageCount = messages.size,
             filterVisible = state.filterVisible,
+            sortMode = state.sortMode,
+            keywordHint = keywordHint,
+            // ★ 只改视图状态，绝不触碰已读标记（需求：排序按钮不能标记已读）
+            onToggleSort = { uiState = uiState.withSortMode(uiState.sortMode.next()) },
             animateLamp = state.animateLamp,
             onToggleTag = { tagId ->
                 val current = uiState.selectedTagIds
@@ -810,6 +835,8 @@ class OverlayService : Service(), OverlayGestureCallbacks {
                     messages = messages,
                     // ★ 已读项是否隐藏：由设置页的「点击后自动清理已读」决定
                     hideRead = clearReadOnTap,
+                    // ★ 排序方式：顶部「排序」按钮切换（时间 / 关键词命中数）
+                    sortMode = state.sortMode,
                     // 展开面板时已整体标记过已读；这里覆盖「展开后新到」的消息。
                     // 第 5 步会在此基础上加 contentIntent.send() 跳转原 App。
                     onMessageClick = { message ->

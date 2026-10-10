@@ -118,7 +118,16 @@ class MessageStore(
         }
     }
 
-    /** 全部标记已读：打开面板时调用。 */
+    /**
+     * 全部标记已读。
+     *
+     * ★ 注意：**展开悬浮窗时不再调用它**。
+     *   之前 OverlayService.onSingleTap() 在展开面板时调用了这个函数，
+     *   而列表默认隐藏已读项 —— 结果「只要展开一下就全变已读」，
+     *   用户看到的是「我没点过消息，却提示已读已隐藏」。
+     *   现在标记已读的唯一入口是 markRead(id)（点击消息触发跳转时调用）。
+     *   保留本方法供「全部已读」这类显式操作使用，目前没有调用点。
+     */
     fun markAllRead() {
         synchronized(lock) {
             if (unread.isEmpty()) return

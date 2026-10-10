@@ -22,6 +22,15 @@ data class OverlayUiState(
     val dragging: Boolean = false,
     /** 长按快捷菜单是否展开。 */
     val quickMenuVisible: Boolean = false,
+    /**
+     * 消息列表排序方式（悬浮窗顶部的「排序」按钮切换，默认按时间）。
+     *
+     * 刻意只存在内存里、不落 DataStore：
+     *   它是一个「当下怎么看」的视图偏好，重启回到默认的时间排序更符合直觉，
+     *   也避免为它增加一个配置键（以及导出/导入的字段）。
+     */
+    val sortMode: com.shihua66666.nuntra.model.MessageSortMode =
+        com.shihua66666.nuntra.model.MessageSortMode.TIME,
 ) {
     val isExpanded: Boolean get() = windowState.isExpanded
 
@@ -30,6 +39,15 @@ data class OverlayUiState(
         copy(quickMenuVisible = visible, dragging = false)
 
     fun withFilterVisible(visible: Boolean): OverlayUiState = copy(filterVisible = visible)
+
+    /**
+     * 切换排序模式。
+     *
+     * ★ 这里**只改视图状态**，绝不触碰已读标记 ——
+     *   需求明确：点击排序按钮不能把消息变成已读。
+     */
+    fun withSortMode(mode: com.shihua66666.nuntra.model.MessageSortMode): OverlayUiState =
+        copy(sortMode = mode)
 
     fun withState(next: OverlayWindowState): OverlayUiState =
         copy(windowState = next, quickMenuVisible = false)

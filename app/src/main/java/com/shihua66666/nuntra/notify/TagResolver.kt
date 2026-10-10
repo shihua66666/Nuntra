@@ -26,7 +26,8 @@ data class TagResolution(
  * 规则（顺序即优先级）：
  *  1. 收集所有命中的关注人（按 tagId 去重）
  *     · 命中多个关注人则取其中 priority 最小的标签（列表里最靠上的）
- *  2. 没有任何关注人命中、但命中了关键词 → 标签 = isDefault 兜底标签
+ *  2. 没有任何关注人命中（目前只有短信会走到这里，因为非短信关键词必须绑定关注人）
+ *     → 标签 = isDefault 兜底标签
  *  3. 两者都没命中 → 该消息不会入库（过滤阶段已丢弃），因此不会出现「无标签」分支
  *
  * 关于「短信默认归入工作标签」：
@@ -57,6 +58,10 @@ class TagResolver(
         val fallback = tagRepository.defaultTag(tags)
         val matchedContacts = tagRepository.watchedContacts.value
             .filter { it.enabled && Keywords.contactHit(haystacks, it.name) }
+        // ★ 关键词命中**无论有没有命中关注人都要算**：
+        //   悬浮窗的「按关键词命中数排序」和「命中 N 个关键词」提示都依赖它。
+        //   之前只在「没命中关注人」的分支里算，导致群聊/私聊消息的命中数永远是 0。
+        val hitKeywords = if (keywords == null) emptyList() else Keywords.hits(haystacks, keywords)
 
         if (matchedContacts.isNotEmpty()) {
             val matchedTagIds = matchedContacts.map { it.tagId }.distinct()
@@ -74,14 +79,13 @@ class TagResolver(
             return TagResolution(
                 tagId = resolvedTag.id,
                 matchedContacts = matchedContacts.map { it.name },
-                matchedKeywords = emptyList(),
+                matchedKeywords = hitKeywords,
                 viaDefaultTag = false,
             )
         }
 
-        // 走到这里说明没有任何关注人命中：短信、以及「只命中关键词」的企业微信 / TIM 消息
-        // 都归入兜底标签（默认预设里就是「工作」）。
-        val hitKeywords = if (keywords == null) emptyList() else Keywords.hits(haystacks, keywords)
+        // 走到这里说明没有任何关注人命中：短信（关键词独立生效）归入兜底标签，
+        // 也就是默认预设里的「工作」。
         return TagResolution(
             tagId = fallback.id,
             matchedContacts = emptyList(),

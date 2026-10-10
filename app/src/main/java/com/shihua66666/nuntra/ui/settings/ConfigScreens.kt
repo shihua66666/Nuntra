@@ -338,7 +338,13 @@ private fun TagRow(
  *  没有任何关注人命中时，消息统一归入兜底标签（默认预设里是「工作」）——
  *  这正是用户在没配置关注人时看到「全都被分到工作」的原因，属于设计行为而非错误。
  *
- * 关键词的作用：只做「命中记录与展示」，不决定标签归属（归属只看关注人）。
+ * 关键词的作用（★ 语义已变更，务必与 NotificationFilter 保持一致）：
+ *   · **只对已关注的联系人 / 群生效** —— 它是「收窄」条件，不是「放行」条件。
+ *     只有消息已经命中关注人，且再命中关键词，才会入库。
+ *     这样群里别人闲聊带一句「快递」不会把悬浮窗撑爆。
+ *   · 因此：**只配关键词、不配关注人 = 一条都不会入库**，页面上已给出提示。
+ *   · 短信是例外：短信关键词在「设置 → 短信监控」里单独配置，独立生效。
+ *   · 标签归属仍只看关注人（短信除外，它归入兜底标签）。
  */
 @Composable
 fun ContactsScreen(
@@ -437,7 +443,14 @@ fun ContactsScreen(
         NtPanel(modifier = Modifier.fillMaxWidth()) {
             SectionHeader(title = "关键词（" + keywords.size + "）")
             Spacer(Modifier.height(6.dp))
-            NtCaption(text = "命中关键词会在消息上标注；标签归属仍由关注人决定。")
+            NtCaption(text = "关键词只对「已关注的联系人 / 群」生效：先在上面添加关注人，关键词才会起作用。")
+            Spacer(Modifier.height(4.dp))
+            NtCaption(
+                text = "命中关键词但未关注的消息不会入库 —— 这是刻意的，防止群里的闲聊恰好带一句「快递」就把悬浮窗撑爆。",
+                color = c.warning,
+            )
+            Spacer(Modifier.height(4.dp))
+            NtCaption(text = "短信是例外：短信关键词在「设置 → 短信监控」里单独配置，独立生效。")
             Spacer(Modifier.height(10.dp))
             NtOutlinedField(
                 value = keywordInput,
